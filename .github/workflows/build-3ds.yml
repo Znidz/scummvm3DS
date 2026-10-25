@@ -48,9 +48,12 @@ jobs:
           # built for another system fails with exit code 126 or 127.
           pick_runnable() {
             for f in $(find "$1" -type f -name "$2*"); do
+              # Only consider Linux programs, never source or text files
+              head -c 4 "$f" | grep -q "ELF" || continue
               chmod +x "$f"
               rc=0
-              "$f" > /dev/null 2>&1 || rc=$?
+              out=$("$f" 2>&1) || rc=$?
+              if echo "$out" | grep -qE "GLIBC|cannot open shared object"; then rc=127; fi
               if [ $rc -ne 126 ] && [ $rc -ne 127 ]; then
                 echo "::notice::Using $f for $2"
                 cp "$f" "$3"
@@ -70,25 +73,27 @@ jobs:
             jq -r --arg p "$2" '[.[].assets[] | select(.name | test($p; "i"))][0].browser_download_url // empty' releases.json
           }
 
-          # makerom: prebuilt release, otherwise build from source
-          url=$(find_asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux)[^a]*\.zip$') || true
-          cat diag.txt 2>/dev/null; rm -f diag.txt
-          if echo "$url" | grep -q '^https'; then
-            curl -fsSL -o makerom.zip "$url" && unzip -o -q makerom.zip -d makerom_files
-            pick_runnable makerom_files makerom ./makerom || true
+          # makerom: build from source so it matches this machine's libraries
+          # (prebuilt releases need a newer glibc), with a prebuilt fallback
+          if git clone --depth 1 https://github.com/3DSGuy/Project_CTR.git; then
+            (cd Project_CTR/makerom && make deps > /dev/null && make > /dev/null) \
+              || echo "::warning::makerom source build failed"
+            pick_runnable Project_CTR/makerom makerom ./makerom || true
           fi
           if [ ! -s makerom ]; then
-            echo "::warning::No prebuilt makerom found, building from source"
-            git clone --depth 1 https://github.com/3DSGuy/Project_CTR.git
-            (cd Project_CTR/makerom && make deps && make) || echo "::error::makerom source build failed"
-            pick_runnable Project_CTR/makerom makerom ./makerom || true
+            url=$(find_asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux)[^a]*\.zip$') || true
+            cat diag.txt 2>/dev/null || true; rm -f diag.txt
+            if echo "$url" | grep -q '^https'; then
+              curl -fsSL -o makerom.zip "$url" && unzip -o -q makerom.zip -d makerom_files
+              pick_runnable makerom_files makerom ./makerom || true
+            fi
           fi
 
           # bannertool: prebuilt release from known repos, otherwise build from source
           for repo in Steveice10/bannertool Epicpkmn11/bannertool diasurgical/bannertool; do
             [ -s bannertool ] && break
             url=$(find_asset "$repo" '^bannertool.*\.zip$') || true
-            cat diag.txt 2>/dev/null; rm -f diag.txt
+            cat diag.txt 2>/dev/null || true; rm -f diag.txt
             if echo "$url" | grep -q '^https'; then
               rm -rf bt && curl -fsSL -o bannertool.zip "$url" && unzip -o -q bannertool.zip -d bt
               pick_runnable bt bannertool ./bannertool || true
