@@ -19,9 +19,19 @@ jobs:
 
       - name: Install 3DS libraries and helper tools
         run: |
-          apt-get update
-          apt-get install -y --no-install-recommends jq unzip curl ca-certificates
-          dkp-pacman -Sy --needed --noconfirm 3ds-dev 3ds-zlib 3ds-libpng \
+          # The package servers sometimes fail, so retry with a pause between tries
+          retry() {
+            for i in 1 2 3 4 5; do
+              "$@" && return 0
+              echo "::warning::Attempt $i failed: $*"
+              sleep $((i * 15))
+            done
+            echo "::error::Gave up after 5 attempts: $*"
+            return 1
+          }
+          retry apt-get update
+          retry apt-get install -y --no-install-recommends jq unzip curl ca-certificates
+          retry dkp-pacman -Sy --needed --noconfirm 3ds-dev 3ds-zlib 3ds-libpng \
             3ds-libjpeg-turbo 3ds-libmad 3ds-libogg 3ds-libvorbisidec 3ds-flac
 
       - name: Get makerom and bannertool
