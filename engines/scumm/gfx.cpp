@@ -21,6 +21,7 @@
 
 #include "common/system.h"
 #include "scumm/actor.h"
+#include "scumm/boxes.h"
 #include "scumm/charset.h"
 #ifdef ENABLE_HE
 #include "scumm/he/intern_he.h"
@@ -669,6 +670,8 @@ void ScummEngine::drawStripToScreen(VirtScreen *vs, int x, int width, int top, i
 		mac_drawStripToScreen(vs, top, x, y, width, height);
 		return;
 	}
+
+	sendStereoDepth(vs, x, top, y, width, height);
 
 	const void *src = vs->getPixels(x, top);
 	int m = _textSurfaceMultiplier;
@@ -1338,6 +1341,123 @@ void ScummEngine::clearTextSurface() {
 		_game.platform == Common::kPlatformFMTowns ? 0 :
 #endif
 		CHARSET_MASK_TRANSPARENCY,  _textSurface.w, _textSurface.h, _textSurface.format.bytesPerPixel);
+}
+
+#pragma mark -
+#pragma mark --- Stereoscopic depth ---
+#pragma mark -
+
+namespace {
+// The room's far top sits behind the screen and its near bottom level with
+// the screen plane, so the verbs and inventory below line up with it.
+// Text floats a little in front.
+const int kStereoFarDepth = 40;
+const int kStereoNearDepth = 128;
+const byte kStereoFlatDepth = 128;
+const byte kStereoTextDepth = 150;
+} // End of anonymous namespace
+
+byte ScummEngine::stereoDepthForGroundY(int groundY, int roomHeight) const {
+	if (roomHeight < 2)
+		return kStereoFlatDepth;
+	groundY = CLIP(groundY, 0, roomHeight - 1);
+	return kStereoFarDepth + groundY * (kStereoNearDepth - kStereoFarDepth) / (roomHeight - 1);
+}
+
+void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int width, int height) {
+	if (_stereoDepthState == 0) {
+		const bool supported = _system->hasFeature(OSystem::kFeatureStereoDepth) &&
+			(_game.version == 5 || _game.version == 6) && _game.heversion == 0 &&
+			_outputPixelFormat.bytesPerPixel == 1 && _textSurfaceMultiplier == 1 &&
+			!_macScreen && !_useCJKMode && _game.platform != Common::kPlatformFMTowns;
+		_stereoDepthState = supported ? 1 : -1;
+	}
+	if (_stereoDepthState < 0)
+		return;
+
+	_stereoDepthBuf.resize(width * height);
+	byte *out = _stereoDepthBuf.data();
+
+	if (vs->number != kMainVirtScreen) {
+		memset(out, kStereoFlatDepth, width * height);
+		_system->copyRectToScreenDepth(out, width, x, y, width, height);
+		return;
+	}
+
+	// Scenery in z-plane p hides actors standing in walkboxes with mask p,
+	// so it is at least as near as the nearest point of those boxes.
+	int planeGroundY[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+	const int numPlanes = MIN(_gdi->_numZBuffer, 8);
+	const int numBoxes = getNumBoxes();
+	for (int box = 0; box < numBoxes; ++box) {
+		const int mask = getMaskFromBox(box);
+		if (mask <= 0 || mask >= numPlanes)
+			continue;
+		const BoxCoords coords = getBoxCoordinates(box);
+		const int boxBottom = MAX(MAX(coords.ul.y, coords.ur.y), MAX(coords.ll.y, coords.lr.y));
+		planeGroundY[mask] = MAX(planeGroundY[mask], boxBottom);
+	}
+
+	// Mask rows are _numStrips bytes apart, so find each plane's start once
+	const byte *maskBase[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	for (int z = 1; z < numPlanes; ++z) {
+		if (planeGroundY[z])
+			maskBase[z] = getMaskBuffer(0, 0, z);
+	}
+
+	for (int col = 0; col < width; ++col) {
+		const int sx = x + col;
+		const int strip = (sx + vs->xstart) / 8;
+
+		// Actors drawn over this column of the screen
+		int actorList[64];
+		int numActorsHere = 0;
+		if (testGfxAnyUsageBits(strip)) {
+			for (int i = 1; i < _numActors && numActorsHere < 64; ++i) {
+				if (testGfxUsageBit(strip, i) && _actors[i]->isInCurrentRoom())
+					actorList[numActorsHere++] = i;
+			}
+		}
+
+		for (int row = 0; row < height; ++row) {
+			const int vy = top + row;
+			byte depth;
+
+			const byte *text = (const byte *)_textSurface.getBasePtr(sx, y + row);
+			const byte *front = vs->getPixels(sx, vy);
+			const byte *back = vs->getBackPixels(sx, vy);
+
+			if (*text != CHARSET_MASK_TRANSPARENCY) {
+				depth = kStereoTextDepth;
+			} else {
+				int groundY = -1;
+
+				// Pixels that differ from the clean background belong to the
+				// nearest actor covering them
+				if (back && *front != *back) {
+					for (int n = 0; n < numActorsHere; ++n) {
+						const Actor *a = _actors[actorList[n]];
+						if (vy >= a->_top && vy <= a->_bottom)
+							groundY = MAX<int>(groundY, a->getRealPos().y);
+					}
+				}
+
+				if (groundY < 0) {
+					groundY = vy;
+					for (int z = 1; z < numPlanes; ++z) {
+						if (maskBase[z] && (maskBase[z][vy * _gdi->_numStrips + sx / 8] & revBitMask(sx & 7)))
+							groundY = MAX(groundY, planeGroundY[z]);
+					}
+				}
+
+				depth = stereoDepthForGroundY(groundY, vs->h);
+			}
+
+			out[row * width + col] = depth;
+		}
+	}
+
+	_system->copyRectToScreenDepth(out, width, x, y, width, height);
 }
 
 byte *ScummEngine::getMaskBuffer(int x, int y, int z) {

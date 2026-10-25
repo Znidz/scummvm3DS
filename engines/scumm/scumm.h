@@ -1519,6 +1519,13 @@ protected:
 	void updateDirtyScreen(VirtScreenNumber slot);
 	void drawStripToScreen(VirtScreen *vs, int x, int width, int top, int bottom);
 
+	// Stereoscopic depth for SCUMM v5 and v6 rooms, passed to the backend
+	// alongside each strip copied to the screen.
+	void sendStereoDepth(VirtScreen *vs, int x, int top, int y, int width, int height);
+	byte stereoDepthForGroundY(int groundY, int roomHeight) const;
+	int _stereoDepthState = 0; // 0: not checked yet, 1: on, -1: off
+	Common::Array<byte> _stereoDepthBuf;
+
 	void mac_markScreenAsDirty(int x, int y, int w, int h);
 	void mac_drawStripToScreen(VirtScreen *vs, int top, int x, int y, int width, int height);
 	void mac_drawIndy3TextBox();
