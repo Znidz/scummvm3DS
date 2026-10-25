@@ -84,7 +84,7 @@ jobs:
         run: |
           export PATH="$DEVKITARM/bin:$PATH"
           export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/3ds/lib/pkgconfig"
-          ./configure --host=3ds --disable-all-engines --enable-engine=kyra,scumm
+          ./configure --host=3ds --disable-all-engines --enable-engine=kyra,lol,eob,scumm,scumm_7_8,he
 
       - name: Build
         run: |
