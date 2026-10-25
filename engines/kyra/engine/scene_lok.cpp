@@ -376,6 +376,7 @@ void KyraEngine_LoK::loadSceneMsc() {
 	_screen->fillRect(0, 0, 319, 199, 0, 5);
 	_res->exists(fileNameBuffer.c_str(), true);
 	_screen->loadBitmap(fileNameBuffer.c_str(), 3, 5, nullptr);
+	_screen->setStereoRoom(_screen->getCPagePtr(5), _sprites->getDrawLayerTable());
 }
 
 void KyraEngine_LoK::startSceneScript(int brandonAlive) {

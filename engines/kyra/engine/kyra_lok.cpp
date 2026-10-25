@@ -205,6 +205,7 @@ Common::Error KyraEngine_LoK::init() {
 	setDebugger(new Debugger_LoK(this));
 
 	KyraEngine_v1::init();
+	_screen->enableStereoDepth();
 
 	_sprites = new Sprites(this, _system);
 	assert(_sprites);

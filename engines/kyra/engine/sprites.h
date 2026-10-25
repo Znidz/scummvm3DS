@@ -78,6 +78,7 @@ public:
 	void refreshSceneAnimObject(uint8 animNum, uint8 shapeNum, uint16 x, uint16 y, bool flipX, bool unkFlag);
 
 	int getDrawLayer(int y);
+	const uint8 *getDrawLayerTable() const { return _drawLayerTable; }
 
 	int _sceneAnimatorBeaconFlag;
 protected:

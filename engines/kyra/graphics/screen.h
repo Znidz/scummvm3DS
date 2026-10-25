@@ -785,6 +785,13 @@ public:
 
 	void setShapePages(int page1, int page2, int minY = -1, int maxY = 201);
 
+	// Stereoscopic depth output (Kyrandia 1 only).
+	// Depth comes from the room's priority mask, from the ground position of
+	// sprites drawn by the animator, and from text, which floats in front.
+	void enableStereoDepth();
+	void setStereoRoom(const uint8 *mask, const uint8 *layerTable);
+	void setStereoShapeGroundY(int y);
+
 	virtual byte getShapeFlag1(int x, int y);
 	virtual byte getShapeFlag2(int x, int y);
 
@@ -976,6 +983,28 @@ protected:
 	void drawShapePlotType37(uint8 *dst, uint8 cmd);
 	void drawShapePlotType48(uint8 *dst, uint8 cmd);
 	void drawShapePlotType52(uint8 *dst, uint8 cmd);
+	void drawShapePlotStereo(uint8 *dst, uint8 cmd);
+
+	enum {
+		kStereoTagRoom = 0,
+		kStereoTagText = 255
+	};
+
+	// One tag per pixel of the room page (page 2): kStereoTagRoom, the
+	// ground y of a sprite drawn there, or kStereoTagText.
+	uint8 *_stereoTags;
+	uint8 *_stereoMask;
+	uint8 *_stereoDepth;
+	const uint8 *_stereoLayerTable;
+	bool _stereoRoomActive;
+	uint8 _stereoShapeTag;
+	DsPlotFunc _dsStereoPlot;
+	bool _dsStereoPriority;
+
+	bool isStereoPage(int pageNum) const;
+	void setStereoTags(int x, int y, int w, int h, uint8 tag);
+	void copyStereoTags(int x1, int y1, int x2, int y2, int w, int h, int srcPage, int dstPage, bool transparent);
+	void updateStereoDepth();
 
 	const uint8 *_dsShapeFadingTable;
 	int _dsShapeFadingLevel;

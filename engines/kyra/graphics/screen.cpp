@@ -59,6 +59,13 @@ Screen::Screen(KyraEngine_v1 *vm, OSystem *system, const ScreenDim *dimTable, co
 	_dsDstPage = nullptr;
 	_dsShapeFadingLevel = _dsDrawLayer = _dsTmpWidth = _dsOffscreenLeft = _dsOffscreenRight = _dsScaleW = _dsScaleH = _dsOffscreenScaleVal1 = _dsOffscreenScaleVal2 = 0;
 
+	_stereoTags = _stereoMask = _stereoDepth = nullptr;
+	_stereoLayerTable = nullptr;
+	_stereoRoomActive = false;
+	_stereoShapeTag = 0;
+	_dsStereoPlot = nullptr;
+	_dsStereoPriority = false;
+
 	memset(_shapePages, 0, sizeof(_shapePages));
 	memset(_fonts, 0, sizeof(_fonts));
 
@@ -110,6 +117,10 @@ Screen::~Screen() {
 		delete[] _sjisOverlayPtrs[i];
 
 	delete[] _pagePtrsBuff;
+
+	delete[] _stereoTags;
+	delete[] _stereoMask;
+	delete[] _stereoDepth;
 
 	for (int f = 0; f < ARRAYSIZE(_fonts); ++f)
 		delete _fonts[f];
@@ -438,6 +449,9 @@ int Screen::updateScreen() {
 	else
 		updateDirtyRects();
 
+	if (_stereoTags && needRealUpdate)
+		updateStereoDepth();
+
 	if (_debugEnabled) {
 		needRealUpdate = true;
 
@@ -654,6 +668,8 @@ void Screen::clearPage(int pageNum) {
 		_forceFullUpdate = true;
 	memset(getPagePtr(pageNum), 0, _screenPageSize);
 	clearOverlayPage(pageNum);
+	if (isStereoPage(pageNum))
+		memset(_stereoTags, kStereoTagRoom, SCREEN_W * SCREEN_H);
 }
 
 int Screen::setCurPage(int pageNum) {
@@ -668,6 +684,8 @@ void Screen::clearCurPage() {
 		_forceFullUpdate = true;
 	memset(getPagePtr(_curPage), 0, _screenPageSize);
 	clearOverlayPage(_curPage);
+	if (isStereoPage(_curPage))
+		memset(_stereoTags, kStereoTagRoom, SCREEN_W * SCREEN_H);
 }
 
 void Screen::copyWsaRect(int x, int y, int w, int h, int dimState, int plotFunc, const uint8 *src,
@@ -1077,6 +1095,9 @@ void Screen::copyRegion(int x1, int y1, int x2, int y2, int w, int h, int srcPag
 
 	copyOverlayRegion(x1, y1, x2, y2, w, h, srcPage, dstPage);
 
+	if (_stereoTags && _internalBytesPerPixel == 1)
+		copyStereoTags(x1, y1, x2, y2, w, h, srcPage, dstPage, !(flags & CR_NO_P_CHECK));
+
 	if (flags & CR_NO_P_CHECK) {
 		while (h--) {
 			memmove(dst, src, w * _internalBytesPerPixel);
@@ -1150,6 +1171,8 @@ void Screen::copyPage(uint8 srcPage, uint8 dstPage) {
 	if (src != dst)
 		memcpy(dst, src, SCREEN_W * _screenHeight * _internalBytesPerPixel);
 	copyOverlayRegion(0, 0, 0, 0, SCREEN_W, _screenHeight, srcPage, dstPage);
+	if (isStereoPage(dstPage) && !isStereoPage(srcPage))
+		memset(_stereoTags, kStereoTagRoom, SCREEN_W * SCREEN_H);
 
 	if (dstPage == 0 || dstPage == 1)
 		_forceFullUpdate = true;
@@ -1182,6 +1205,9 @@ void Screen::copyBlockToPage(int pageNum, int x, int y, int w, int h, const uint
 		addDirtyRect(x, y, w, h);
 
 	clearOverlayRect(pageNum, x, y, w, h);
+
+	if (isStereoPage(pageNum))
+		setStereoTags(x, y, w, h, kStereoTagRoom);
 
 	while (h--) {
 		memcpy(dst, src, w * _internalBytesPerPixel);
@@ -1258,6 +1284,9 @@ void Screen::fillRect(int x1, int y1, int x2, int y2, uint8 color, int pageNum, 
 		addDirtyRect(x1, y1, x2-x1+1, y2-y1+1);
 
 	clearOverlayRect(pageNum, x1, y1, x2-x1+1, y2-y1+1);
+
+	if (isStereoPage(pageNum))
+		setStereoTags(x1, y1, x2 - x1 + 1, y2 - y1 + 1, kStereoTagRoom);
 
 	if (_4bitPixelPacking) {
 		color &= 0x0F;
@@ -1698,6 +1727,18 @@ void Screen::drawChar(uint16 c, int x, int y, int pitch) {
 		destPage += (y * 2) * 640 * bpp + (x * 2 * bpp);
 
 		fnt->drawChar(c, destPage, 640, bpp);
+	} else if (isStereoPage(_curPage) && _internalBytesPerPixel == 1 && charWidth <= 32 && charHeight <= 32) {
+		uint8 *glyphDst = getPagePtr(_curPage) + y * SCREEN_W + x;
+		uint8 before[32 * 32];
+		for (int i = 0; i < charHeight; ++i)
+			memcpy(before + i * charWidth, glyphDst + i * SCREEN_W, charWidth);
+		fnt->drawChar(c, glyphDst, SCREEN_W, 1);
+		for (int i = 0; i < charHeight; ++i) {
+			for (int j = 0; j < charWidth; ++j) {
+				if (glyphDst[i * SCREEN_W + j] != before[i * charWidth + j])
+					_stereoTags[(y + i) * SCREEN_W + x + j] = kStereoTagText;
+			}
+		}
 	} else {
 		fnt->drawChar(c, getPagePtr(_curPage) + y * SCREEN_W * _internalBytesPerPixel + x * _internalBytesPerPixel, SCREEN_W, _internalBytesPerPixel);
 	}
@@ -1859,6 +1900,12 @@ void Screen::drawShape(uint8 pageNum, const uint8 *shapeData, int x, int y, int 
 		if (dsPlot3 != dsPlot2 && !dsPlot3)
 			warning("Missing drawShape plotting method type %d", ppc & ~8);
 		return;
+	}
+
+	if (_stereoShapeTag && isStereoPage(pageNum) && dsPlot2 == dsPlot3) {
+		_dsStereoPlot = dsPlot2;
+		_dsStereoPriority = (flags & kDRAWSHP_PRIORITY) != 0;
+		dsPlot = dsPlot2 = dsPlot3 = &Screen::drawShapePlotStereo;
 	}
 
 	int curY = y;
@@ -3222,6 +3269,173 @@ void Screen::setShapePages(int page1, int page2, int minY, int maxY) {
 	_maskMaxY = maxY;
 }
 
+#pragma mark - Stereoscopic depth
+
+namespace {
+// The Kyrandia 1 room area, and the depth range it is given: the far top of
+// the room sits behind the screen and the near bottom sits on the screen
+// plane, level with the interface around it. Text floats just in front.
+const int kStereoRoomX1 = 8, kStereoRoomX2 = 312;
+const int kStereoRoomY1 = 8, kStereoRoomY2 = 136;
+const int kStereoFarDepth = 40, kStereoNearDepth = 128;
+const uint8 kStereoFlatDepth = 128;
+const uint8 kStereoTextDepth = 150;
+
+uint8 groundYToDepth(int y) {
+	y = CLIP(y, kStereoRoomY1, kStereoRoomY2 - 1);
+	return kStereoFarDepth + (y - kStereoRoomY1) * (kStereoNearDepth - kStereoFarDepth) / (kStereoRoomY2 - 1 - kStereoRoomY1);
+}
+} // End of anonymous namespace
+
+void Screen::enableStereoDepth() {
+	if (_stereoTags || !_system->hasFeature(OSystem::kFeatureStereoDepth))
+		return;
+	// Only the plain 8-bit DOS-style screen setup is supported
+	if (_useOverlays || _isAmiga || _internalBytesPerPixel != 1)
+		return;
+
+	_stereoTags = new uint8[SCREEN_W * SCREEN_H]();
+	_stereoMask = new uint8[SCREEN_W * SCREEN_H]();
+	_stereoDepth = new uint8[SCREEN_W * SCREEN_H]();
+}
+
+void Screen::setStereoRoom(const uint8 *mask, const uint8 *layerTable) {
+	if (!_stereoTags)
+		return;
+	memcpy(_stereoMask, mask, SCREEN_W * SCREEN_H);
+	_stereoLayerTable = layerTable;
+	_stereoRoomActive = true;
+}
+
+void Screen::setStereoShapeGroundY(int y) {
+	if (!_stereoTags)
+		return;
+	_stereoShapeTag = (y <= 0) ? (uint8)kStereoTagRoom : (uint8)CLIP(y, 1, kStereoTagText - 1);
+}
+
+bool Screen::isStereoPage(int pageNum) const {
+	return _stereoTags && pageNum >= 0 && pageNum < SCREEN_PAGE_NUM && _pagePtrs[pageNum] == _pagePtrs[2];
+}
+
+void Screen::setStereoTags(int x, int y, int w, int h, uint8 tag) {
+	if (x < 0) {
+		w += x;
+		x = 0;
+	}
+	if (y < 0) {
+		h += y;
+		y = 0;
+	}
+	w = MIN(w, SCREEN_W - x);
+	h = MIN(h, SCREEN_H - y);
+	if (w <= 0 || h <= 0)
+		return;
+
+	uint8 *dst = _stereoTags + y * SCREEN_W + x;
+	while (h--) {
+		memset(dst, tag, w);
+		dst += SCREEN_W;
+	}
+}
+
+void Screen::copyStereoTags(int x1, int y1, int x2, int y2, int w, int h, int srcPage, int dstPage, bool transparent) {
+	if (!isStereoPage(dstPage) || y2 < 0 || y2 + h > SCREEN_H || x2 < 0 || x2 + w > SCREEN_W)
+		return;
+	if (x1 < 0 || x1 + w > SCREEN_W || y1 < 0 || y1 + h > SCREEN_H) {
+		setStereoTags(x2, y2, w, h, kStereoTagRoom);
+		return;
+	}
+
+	const bool fromRoom = isStereoPage(srcPage);
+	const uint8 *srcPixels = getCPagePtr(srcPage);
+
+	// Copy rows in an order that is safe when source and destination overlap
+	const bool upwards = fromRoom && y2 > y1;
+	for (int i = 0; i < h; ++i) {
+		const int row = upwards ? h - 1 - i : i;
+		uint8 *dst = _stereoTags + (y2 + row) * SCREEN_W + x2;
+		const uint8 *src = _stereoTags + (y1 + row) * SCREEN_W + x1;
+		const uint8 *px = srcPixels + (y1 + row) * SCREEN_W + x1;
+
+		if (!transparent) {
+			if (fromRoom)
+				memmove(dst, src, w);
+			else
+				memset(dst, kStereoTagRoom, w);
+		} else {
+			uint8 rowTags[SCREEN_W];
+			if (fromRoom)
+				memcpy(rowTags, src, w);
+			for (int x = 0; x < w; ++x) {
+				if (px[x])
+					dst[x] = fromRoom ? rowTags[x] : (uint8)kStereoTagRoom;
+			}
+		}
+	}
+}
+
+void Screen::drawShapePlotStereo(uint8 *dst, uint8 cmd) {
+	(this->*_dsStereoPlot)(dst, cmd);
+
+	const uint32 relOffs = dst - _dsDstPage;
+	if (relOffs >= SCREEN_W * SCREEN_H)
+		return;
+	// Pixels hidden behind higher priority scenery keep the scenery's depth
+	if (_dsStereoPriority && _dsDrawLayer < (_shapePages[0][relOffs] & 7))
+		return;
+	_stereoTags[relOffs] = _stereoShapeTag;
+}
+
+void Screen::updateStereoDepth() {
+	const uint8 *page0 = getCPagePtr(0);
+	const uint8 *page2 = getCPagePtr(2);
+
+	// Anything on screen that differs from the room page was drawn straight
+	// to the screen, such as menus. If most of the room differs, a room
+	// change or full-screen picture is under way, so keep it flat.
+	bool roomValid = _stereoRoomActive && _stereoLayerTable;
+	if (roomValid) {
+		int differing = 0;
+		for (int y = kStereoRoomY1; y < kStereoRoomY2; ++y) {
+			const int row = y * SCREEN_W;
+			for (int x = kStereoRoomX1; x < kStereoRoomX2; ++x)
+				differing += (page0[row + x] != page2[row + x]) ? 1 : 0;
+		}
+		roomValid = differing < (kStereoRoomX2 - kStereoRoomX1) * (kStereoRoomY2 - kStereoRoomY1) / 4;
+	}
+
+	memset(_stereoDepth, kStereoFlatDepth, SCREEN_W * SCREEN_H);
+
+	if (roomValid) {
+		for (int y = kStereoRoomY1; y < kStereoRoomY2; ++y) {
+			const int row = y * SCREEN_W;
+			for (int x = kStereoRoomX1; x < kStereoRoomX2; ++x) {
+				const int p = row + x;
+				const uint8 tag = _stereoTags[p];
+				uint8 depth;
+
+				if (tag == kStereoTagText || page0[p] != page2[p]) {
+					depth = kStereoTextDepth;
+				} else if (tag != kStereoTagRoom) {
+					depth = groundYToDepth(tag);
+				} else {
+					// Scenery covering sprites that stand above a layer's
+					// line on the ground is as near as that line.
+					const int layer = _stereoMask[p] & 7;
+					int groundY = y;
+					if (layer >= 2 && _stereoLayerTable[layer] > groundY)
+						groundY = _stereoLayerTable[layer];
+					depth = groundYToDepth(groundY);
+				}
+
+				_stereoDepth[p] = depth;
+			}
+		}
+	}
+
+	_system->copyRectToScreenDepth(_stereoDepth, SCREEN_W, 0, _yTransOffs, SCREEN_W, _screenHeight - _yTransOffs);
+}
+
 void Screen::setMouseCursor(int x, int y, const byte *shape) {
 	if (!shape)
 		return;
@@ -3452,6 +3666,8 @@ void Screen::loadBitmap(const char *filename, int tempPage, int dstPage, Palette
 	memset(dstData, 0, _screenPageSize);
 	if (dstPage == 0 || tempPage == 0)
 		_forceFullUpdate = true;
+	if (isStereoPage(dstPage) || isStereoPage(tempPage))
+		memset(_stereoTags, kStereoTagRoom, SCREEN_W * SCREEN_H);
 
 	switch (compType) {
 	case 0:

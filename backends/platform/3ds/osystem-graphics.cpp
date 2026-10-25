@@ -245,7 +245,8 @@ void OSystem_3DS::initSize(uint width, uint height,
 		_stereoEye.create(width, height, _pfGame);
 		memset(_gameDepth.getPixels(), 128, _gameDepth.pitch * _gameDepth.h);
 	} else {
-		_gameTopTextureRight.free();
+		// The right eye texture is left allocated: Sprite::free() does not
+		// reset its GPU texture, so a later create() would delete it twice.
 		_gameDepth.free();
 		_stereoEye.free();
 	}

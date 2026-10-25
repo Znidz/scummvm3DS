@@ -216,6 +216,8 @@ void Animator_LoK::prepDrawAllObjects() {
 			int xpos = curObject->x1;
 			int ypos = curObject->y1;
 
+			_screen->setStereoShapeGroundY(curObject->drawY);
+
 			int drawLayer = 0;
 			if (!(curObject->flags & Screen::kDRAWSHP_PRIORITY))
 				drawLayer = 7;
@@ -338,6 +340,8 @@ void Animator_LoK::prepDrawAllObjects() {
 		}
 		curObject = curObject->nextAnimObject;
 	}
+
+	_screen->setStereoShapeGroundY(0);
 }
 
 void Animator_LoK::copyChangedObjectsForward(int refreshFlag, bool refreshScreen) {
