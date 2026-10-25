@@ -43,7 +43,7 @@ jobs:
           }
 
           # makerom: prebuilt release, otherwise build from source
-          url=$(find_asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux).*x86_64.*\.zip$')
+          url=$(find_asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux)[^a]*\.zip$') || true
           cat diag.txt 2>/dev/null; rm -f diag.txt
           if echo "$url" | grep -q '^https'; then
             curl -fsSL -o makerom.zip "$url" && unzip -o -q makerom.zip -d makerom_files
@@ -59,7 +59,7 @@ jobs:
           # bannertool: prebuilt release from known repos, otherwise build from source
           for repo in Steveice10/bannertool Epicpkmn11/bannertool diasurgical/bannertool; do
             [ -s bannertool ] && break
-            url=$(find_asset "$repo" '^bannertool.*\.zip$')
+            url=$(find_asset "$repo" '^bannertool.*\.zip$') || true
             cat diag.txt 2>/dev/null; rm -f diag.txt
             if echo "$url" | grep -q '^https'; then
               rm -rf bt && curl -fsSL -o bannertool.zip "$url" && unzip -o -q bannertool.zip -d bt
@@ -69,7 +69,7 @@ jobs:
           if [ ! -s bannertool ]; then
             echo "::warning::No prebuilt bannertool found, building from source"
             for repo in Steveice10/bannertool Epicpkmn11/bannertool diasurgical/bannertool; do
-              git clone --depth 1 --recursive "https://github.com/$repo.git" bt_src && break
+              git clone --depth 1 --recursive "https://github.com/$repo.git" bt_src 2>/dev/null && break
             done
             (cd bt_src && make) || echo "::error::bannertool source build failed"
             cp "$(find bt_src -type f -name bannertool -perm -u+x | head -n1)" ./bannertool || true
