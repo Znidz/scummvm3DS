@@ -107,8 +107,17 @@ jobs:
         continue-on-error: true
         run: |
           export PATH="$DEVKITARM/bin:$PATH"
-          make scummvm.cia MAKEROM="$HOME/tools/makerom" BANNERTOOL="$HOME/tools/bannertool" \
-            || { echo "::error::CIA packaging failed"; exit 1; }
+          "$HOME/tools/makerom" -version 2>&1 | head -n 2 || true
+          "$HOME/tools/bannertool" 2>&1 | head -n 2 || true
+          if ! make V=1 scummvm.cia MAKEROM="$HOME/tools/makerom" BANNERTOOL="$HOME/tools/bannertool" > cia.log 2>&1; then
+            cat cia.log
+            # Show the end of the log on the run's summary page
+            tail -n 8 cia.log | while IFS= read -r line; do
+              echo "::error::CIA: $(echo "$line" | cut -c1-300)"
+            done
+            exit 1
+          fi
+          cat cia.log
 
       - name: Publish release
         env:
