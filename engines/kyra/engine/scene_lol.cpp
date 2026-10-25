@@ -658,6 +658,12 @@ void LoLEngine::moveParty(uint16 direction, int unk1, int unk2, int buttonShape)
 	_currentBlock = npos;
 	_sceneDefaultUpdate = 1;
 
+	// Let the stereoscopic depth glide through a step forward or back
+	if (unk2 == 0)
+		_screen->startStereoDolly(0.5f);
+	else if (unk2 == 1)
+		_screen->startStereoDolly(-0.5f);
+
 	calcCoordinates(_partyPosX, _partyPosY, _currentBlock, 0x80, 0x80);
 	_flagsTable[73] &= 0xFD;
 

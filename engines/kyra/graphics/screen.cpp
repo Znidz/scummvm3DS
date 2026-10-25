@@ -69,6 +69,9 @@ Screen::Screen(KyraEngine_v1 *vm, OSystem *system, const ScreenDim *dimTable, co
 	_stereoStageX1 = _stereoStageX2 = 0;
 	_stereoViewDepth = _stereoViewStage = _stereoViewPixels = _stereoViewShownDepth = nullptr;
 	_stereoViewValid = false;
+	_stereoDollyZ = 0.f;
+	_stereoDollyStart = 0;
+	_stereoDollyPending = _stereoDollyActive = false;
 
 	memset(_shapePages, 0, sizeof(_shapePages));
 	memset(_fonts, 0, sizeof(_fonts));
@@ -480,6 +483,8 @@ int Screen::updateScreen() {
 #ifdef KYRA_SCREEN_IDLE_REFRESH
 void Screen::updateBackendScreen(bool force) {
 	if (force || _system->getMillis() >= _idleUpdateTimer) {
+		if (_stereoDollyActive)
+			updateStereoDepth();
 		_system->updateScreen();
 		_idleUpdateTimer = _system->getMillis() + (force ? SCREEN_IDLEREFRESH_RESTART_MSEC : SCREEN_IDLEREFRESH_RATE_MSEC);
 	}
@@ -3289,6 +3294,19 @@ const int kStereoFarDepth = 40, kStereoNearDepth = 128;
 const uint8 kStereoFlatDepth = 128;
 const uint8 kStereoTextDepth = 150;
 
+// Depth of the first person view for a distance, where the nearest wall
+// face straight ahead (distance 1) sits on the screen plane, and back again
+uint8 stereoViewDepthForZ(float z) {
+	if (z < 0.4f)
+		z = 0.4f;
+	const int depth = (int)(128.f + 155.f * (1.f / z - 1.f));
+	return (uint8)CLIP<int>(depth, 1, 190);
+}
+
+float stereoViewZForDepth(int depth) {
+	return 1.f / ((depth - 128) / 155.f + 1.f);
+}
+
 uint8 groundYToDepth(int y) {
 	y = CLIP(y, kStereoRoomY1, kStereoRoomY2 - 1);
 	return kStereoFarDepth + (y - kStereoRoomY1) * (kStereoNearDepth - kStereoFarDepth) / (kStereoRoomY2 - 1 - kStereoRoomY1);
@@ -3464,6 +3482,20 @@ void Screen::stereoViewDone(int pageNum) {
 		memcpy(_stereoViewPixels + y * _stereoViewW, src + y * SCREEN_W, _stereoViewW);
 	memcpy(_stereoViewShownDepth, _stereoViewDepth, _stereoViewW * _stereoViewH);
 	_stereoViewValid = true;
+
+	if (_stereoDollyPending) {
+		_stereoDollyPending = false;
+		_stereoDollyActive = true;
+		_stereoDollyStart = _system->getMillis();
+	}
+}
+
+void Screen::startStereoDolly(float zOffset) {
+	if (!_stereoViewDepth)
+		return;
+	_stereoDollyZ = zOffset;
+	_stereoDollyPending = true;
+	_stereoDollyActive = false;
 }
 
 void Screen::updateStereoDepth() {
@@ -3484,14 +3516,37 @@ void Screen::updateStereoDepth() {
 					differing += (screen[x] != view[x]) ? 1 : 0;
 			}
 
+			// While a step's animation is still on screen, keep the last depth
+			// rather than dropping to flat for a moment
+			if (_stereoDollyPending && differing >= _stereoViewW * _stereoViewH / 4)
+				return;
+
 			if (differing < _stereoViewW * _stereoViewH / 4) {
+				uint8 remap[256];
+				for (int d = 0; d < 256; ++d)
+					remap[d] = d;
+
+				if (_stereoDollyActive) {
+					static const uint32 kDollyMsec = 220;
+					const uint32 elapsed = _system->getMillis() - _stereoDollyStart;
+					if (elapsed >= kDollyMsec) {
+						_stereoDollyActive = false;
+					} else {
+						// Ease out: fast at first, settling gently
+						const float t = 1.f - (float)elapsed / kDollyMsec;
+						const float offset = _stereoDollyZ * t * t;
+						for (int d = 1; d < 256; ++d)
+							remap[d] = stereoViewDepthForZ(stereoViewZForDepth(d) + offset);
+					}
+				}
+
 				for (int y = 0; y < _stereoViewH; ++y) {
 					const uint8 *screen = page0 + (_stereoViewY + y) * SCREEN_W + _stereoViewX;
 					const uint8 *view = _stereoViewPixels + y * _stereoViewW;
 					const uint8 *depth = _stereoViewShownDepth + y * _stereoViewW;
 					uint8 *out = _stereoDepth + (_stereoViewY + y) * SCREEN_W + _stereoViewX;
 					for (int x = 0; x < _stereoViewW; ++x)
-						out[x] = (screen[x] == view[x]) ? depth[x] : kStereoFlatDepth;
+						out[x] = (screen[x] == view[x]) ? remap[depth[x]] : kStereoFlatDepth;
 				}
 			}
 		}

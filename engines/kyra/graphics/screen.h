@@ -800,6 +800,10 @@ public:
 	void stereoBeginStage(int pageNum, int x1, int x2);
 	void stereoEndStage(int pageNum, uint8 depth);
 	void stereoViewDone(int pageNum);
+	// After the party steps forward (zOffset > 0) or back (< 0), the next
+	// view drawn starts at the distances seen before the step and glides
+	// to its own over a short time.
+	void startStereoDolly(float zOffset);
 
 	virtual byte getShapeFlag1(int x, int y);
 	virtual byte getShapeFlag2(int x, int y);
@@ -1017,6 +1021,10 @@ protected:
 	uint8 *_stereoViewPixels;
 	uint8 *_stereoViewShownDepth;
 	bool _stereoViewValid;
+	float _stereoDollyZ;
+	uint32 _stereoDollyStart;
+	bool _stereoDollyPending;
+	bool _stereoDollyActive;
 
 	bool isStereoPage(int pageNum) const;
 	void setStereoTags(int x, int y, int w, int h, uint8 tag);

@@ -770,6 +770,12 @@ void EoBCoreEngine::moveParty(uint16 block) {
 	uint16 old = _currentBlock;
 	_currentBlock = block;
 
+	// Let the stereoscopic depth glide through the step
+	if (block == calcNewBlockPosition(old, _currentDirection))
+		_screen->startStereoDolly(0.5f);
+	else if (block == calcNewBlockPosition(old, (_currentDirection + 2) & 3))
+		_screen->startStereoDolly(-0.5f);
+
 	_automap->markVisited(block);
 
 	runLevelScript(old, 2);
