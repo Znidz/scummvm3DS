@@ -195,6 +195,7 @@ Common::Error KyraRpgEngine::init() {
 
 	_blockDrawingBuffer = new uint16[1320]();
 	memset(_vcnDepth, 0, sizeof(_vcnDepth));
+	memset(_vcnDepthRight, 0, sizeof(_vcnDepthRight));
 	_stereoInitDone = false;
 	_sceneWindowBuffer = nullptr;
 

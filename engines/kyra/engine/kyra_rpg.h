@@ -322,11 +322,13 @@ protected:
 
 	// Stereoscopic depth of the first person view
 	void stereoInit();
-	bool stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *depths) const;
+	bool stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *leftDepths, uint8 *rightDepths) const;
 	uint8 stereoBlockDepth(int block, bool face) const;
 	void stereoBeginStage();
 	void stereoEndStage(int block, bool face);
+	// Depth at the left and right edge of each wall tile, 0 for none
 	uint8 _vcnDepth[330];
+	uint8 _vcnDepthRight[330];
 	bool _stereoInitDone;
 	void vcnDraw_fw_4bit(uint8 *&dst, const uint8 *&src);
 	void vcnDraw_bw_4bit(uint8 *&dst, const uint8 *&src);

@@ -455,11 +455,11 @@ void OSystem_3DS::blitGameRect(Sprite &texture, const Graphics::Surface &src, co
 // same spot, and gaps opened up behind near objects are filled from the
 // farther of the two neighbouring pixels.
 void OSystem_3DS::stereoWarp(int eye) {
-	const int8 *shift = _stereoShift[eye];
 	const int w = _gameScreen.w;
 	int16 *rowDepth = new int16[w];
 
 	for (int y = 0; y < _gameScreen.h; ++y) {
+		const int8 *shift = _stereoShift[eye][y & 3];
 		const byte *src = (const byte *)_gameScreen.getBasePtr(0, y);
 		const byte *depth = (const byte *)_gameDepth.getBasePtr(0, y);
 		byte *dst = (byte *)_stereoEye.getBasePtr(0, y);
@@ -512,12 +512,25 @@ void OSystem_3DS::updateStereoSlider() {
 	if (change < 0.02f && change > -0.02f && (slider > 0.f) == (_stereoSlider > 0.f))
 		return;
 
+	// The shift can only be whole pixels, so rows take turns rounding up
+	// or down. Seen together they give the depths in between, rather than
+	// visible steps. The thresholds are a 4 step ordered dither.
+	static const float kDither[4] = { 0.125f, 0.625f, 0.375f, 0.875f };
+
 	_stereoSlider = slider;
 	for (int d = 0; d < 256; ++d) {
-		const float exact = (d - 128 + _stereoPosition) * slider * kMaxSeparation * _stereoStrength / (128.f * 100.f);
-		const int separation = (int)(exact + (exact < 0.f ? -0.5f : 0.5f));
-		_stereoShift[0][d] = separation / 2;
-		_stereoShift[1][d] = separation / 2 - separation;
+		const float separation = (d - 128 + _stereoPosition) * slider * kMaxSeparation * _stereoStrength / (128.f * 100.f);
+		for (int phase = 0; phase < 4; ++phase) {
+			const float left = separation / 2.f + kDither[phase];
+			const float right = -separation / 2.f + kDither[phase];
+			int leftShift = (int)left, rightShift = (int)right;
+			if (left < leftShift)
+				--leftShift;
+			if (right < rightShift)
+				--rightShift;
+			_stereoShift[0][phase][d] = (int8)CLIP<int>(leftShift, -64, 64);
+			_stereoShift[1][phase][d] = (int8)CLIP<int>(rightShift, -64, 64);
+		}
 	}
 
 	if (_stereoDepthActive)

@@ -151,8 +151,7 @@ int viewRow(int block) {
 	return block < 7 ? 0 : (block < 12 ? 1 : (block < 15 ? 2 : 3));
 }
 
-uint8 stereoFloorCeilingDepth(int tileRow) {
-	const int y = tileRow * 8 + 4;
+uint8 stereoFloorCeilingDepth(int y) {
 	float z = 3.3f;
 	if (y > 32)
 		z = 72.f / (y - 32);
@@ -170,7 +169,7 @@ void KyraRpgEngine::stereoInit() {
 	screen()->setStereoViewport(_sceneXoffset, 0, 176, 120);
 }
 
-bool KyraRpgEngine::stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *depths) const {
+bool KyraRpgEngine::stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *leftDepths, uint8 *rightDepths) const {
 	if (startBlockY >= 15 || !numBlocksX || numBlocksX > 22)
 		return false;
 
@@ -181,11 +180,16 @@ bool KyraRpgEngine::stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, u
 		return false;
 
 	// Side walls run from near at the outer edge to far at the inner edge
+	const float zNear = kViewWallZ[k][0], zFar = kViewWallZ[k][1];
 	for (int i = 0; i < numBlocksX; ++i) {
-		float t = (i + 0.5f) / numBlocksX;
-		if (flipped)
-			t = 1.f - t;
-		depths[i] = viewDepthForZ(kViewWallZ[k][0] + (kViewWallZ[k][1] - kViewWallZ[k][0]) * t);
+		float tLeft = (float)i / numBlocksX;
+		float tRight = (float)(i + 1) / numBlocksX;
+		if (flipped) {
+			tLeft = 1.f - tLeft;
+			tRight = 1.f - tRight;
+		}
+		leftDepths[i] = viewDepthForZ(zNear + (zFar - zNear) * tLeft);
+		rightDepths[i] = viewDepthForZ(zNear + (zFar - zNear) * tRight);
 	}
 	return true;
 }
@@ -227,6 +231,7 @@ void KyraRpgEngine::generateBlockDrawingBuffer() {
 
 	memset(_blockDrawingBuffer, 0, 660 * sizeof(uint16));
 	memset(_vcnDepth, 0, sizeof(_vcnDepth));
+	memset(_vcnDepthRight, 0, sizeof(_vcnDepthRight));
 
 	_wllProcessFlag = ((_currentBlock >> 5) + (_currentBlock & 0x1F) + _currentDirection) & 1;
 
@@ -351,16 +356,18 @@ void KyraRpgEngine::generateVmpTileData(int16 startBlockX, uint8 startBlockY, ui
 
 	uint16 *vmp = &_vmpPtr[(_wllVmpMap[vmpMapIndex] - 1) * 431 + vmpOffset + 330];
 
-	uint8 depths[22];
-	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, false, depths);
+	uint8 depths[22], depthsRight[22];
+	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, false, depths, depthsRight);
 
 	for (int i = 0; i < numBlocksY; i++) {
 		uint16 *bl = &_blockDrawingBuffer[(startBlockY + i) * 22 + startBlockX];
 		for (int ii = 0; ii < numBlocksX; ii++) {
 			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp) {
 				*bl = *vmp;
-				if (hasDepth)
+				if (hasDepth) {
 					_vcnDepth[(startBlockY + i) * 22 + startBlockX + ii] = depths[ii];
+					_vcnDepthRight[(startBlockY + i) * 22 + startBlockX + ii] = depthsRight[ii];
+				}
 			}
 			bl++;
 			vmp++;
@@ -375,8 +382,8 @@ void KyraRpgEngine::generateVmpTileDataFlipped(int16 startBlockX, uint8 startBlo
 	uint16 *vmp = &_vmpPtr[(_wllVmpMap[vmpMapIndex] - 1) * 431 + vmpOffset + 330] + (numBlocksX - 1);
 	uint16 *bl = &_blockDrawingBuffer[startBlockY * 22 + startBlockX];
 
-	uint8 depths[22];
-	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, true, depths);
+	uint8 depths[22], depthsRight[22];
+	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, true, depths, depthsRight);
 
 	for (int i = 0; i < numBlocksY; i++) {
 		uint16 *bl2 = bl;
@@ -384,8 +391,10 @@ void KyraRpgEngine::generateVmpTileDataFlipped(int16 startBlockX, uint8 startBlo
 		for (int ii = 0; ii < numBlocksX; ii++) {
 			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp) {
 				*bl = (*vmp & 0x4000) ? *vmp - 0x4000 : *vmp | 0x4000;
-				if (hasDepth)
+				if (hasDepth) {
 					_vcnDepth[(startBlockY + i) * 22 + startBlockX + ii] = depths[ii];
+					_vcnDepthRight[(startBlockY + i) * 22 + startBlockX + ii] = depthsRight[ii];
+				}
 			}
 			bl++;
 			vmp--;
@@ -545,13 +554,21 @@ void KyraRpgEngine::drawVcnBlocks() {
 
 	stereoInit();
 	if (uint8 *viewDepth = screen()->getStereoViewDepth()) {
+		// Depth is worked out per pixel so that slanted surfaces are smooth
 		for (int y = 0; y < 15; y++) {
 			for (int x = 0; x < 22; x++) {
 				const int i = y * 22 + x;
-				const uint8 depth = (_blockDrawingBuffer[i] && _vcnDepth[i]) ? _vcnDepth[i] : stereoFloorCeilingDepth(y);
 				uint8 *dst = viewDepth + (y << 3) * 176 + (x << 3);
-				for (int blockY = 0; blockY < 8; blockY++)
-					memset(dst + blockY * 176, depth, 8);
+				if (_blockDrawingBuffer[i] && _vcnDepth[i]) {
+					const int left = _vcnDepth[i], right = _vcnDepthRight[i];
+					for (int px = 0; px < 8; px++)
+						dst[px] = (uint8)(left + (right - left) * (2 * px + 1) / 16);
+					for (int blockY = 1; blockY < 8; blockY++)
+						memcpy(dst + blockY * 176, dst, 8);
+				} else {
+					for (int blockY = 0; blockY < 8; blockY++)
+						memset(dst + blockY * 176, stereoFloorCeilingDepth((y << 3) + blockY), 8);
+				}
 			}
 		}
 	}

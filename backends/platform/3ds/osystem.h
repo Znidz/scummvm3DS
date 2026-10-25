@@ -292,7 +292,8 @@ private:
 	float _stereoSlider;
 	int _stereoStrength;
 	int _stereoPosition;
-	int8 _stereoShift[2][256];
+	// Pixel shift per eye, per row phase of the dither pattern, per depth
+	int8 _stereoShift[2][4][256];
 
 	// Focus
 	Common::Rect _focusRect;
