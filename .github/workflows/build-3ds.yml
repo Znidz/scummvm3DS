@@ -24,31 +24,61 @@ jobs:
           dkp-pacman -Sy --needed --noconfirm 3ds-dev 3ds-zlib 3ds-libpng \
             3ds-libjpeg-turbo 3ds-libmad 3ds-libogg 3ds-libvorbisidec 3ds-flac
 
-      - name: Fetch makerom and bannertool
+      - name: Get makerom and bannertool
+        id: tools
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$HOME/tools" && cd "$HOME/tools"
-          # Search every release, since Project_CTR publishes each tool separately
-          asset() {
-            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$1/releases?per_page=50" > releases.json
-            echo "Assets in $1:" >&2
-            jq -r '.[].assets[].name' releases.json | head -n 30 >&2
-            url=$(jq -r --arg p "$2" '[.[].assets[] | select(.name | test($p; "i"))][0].browser_download_url // empty' releases.json)
-            if [ -z "$url" ]; then echo "No asset matching $2 in $1" >&2; exit 1; fi
-            echo "Using $url" >&2
-            echo "$url"
+          apt-get install -y --no-install-recommends git make g++ gcc > /dev/null
+
+          # Prints the first release asset of repo $1 whose name matches $2
+          find_asset() {
+            code=$(curl -sSL -o releases.json -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$1/releases?per_page=50")
+            if [ "$code" != "200" ]; then echo "::warning::$1 releases: HTTP $code" >> diag.txt; return 1; fi
+            echo "::notice::Assets in $1: $(jq -r '[.[].assets[].name] | join(", ")' releases.json | cut -c1-500)" >> diag.txt
+            jq -r --arg p "$2" '[.[].assets[] | select(.name | test($p; "i"))][0].browser_download_url // empty' releases.json
           }
-          curl -fsSL -o makerom.zip "$(asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux).*x86_64.*\.zip$')"
-          unzip -o makerom.zip -d makerom_files
-          curl -fsSL -o bannertool.zip "$(asset Steveice10/bannertool '^bannertool.*\.zip$')"
-          unzip -o bannertool.zip -d bannertool_files
-          cp "$(find makerom_files -type f -name makerom | head -n1)" ./makerom
-          cp "$(find bannertool_files -type f -path '*linux*' -name bannertool | head -n1)" ./bannertool
-          chmod +x makerom bannertool
-          ./makerom -h | head -n 3 || true
-          ls -l
+
+          # makerom: prebuilt release, otherwise build from source
+          url=$(find_asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux).*x86_64.*\.zip$')
+          cat diag.txt 2>/dev/null; rm -f diag.txt
+          if echo "$url" | grep -q '^https'; then
+            curl -fsSL -o makerom.zip "$url" && unzip -o -q makerom.zip -d makerom_files
+            cp "$(find makerom_files -type f -name makerom | head -n1)" ./makerom || true
+          fi
+          if [ ! -s makerom ]; then
+            echo "::warning::No prebuilt makerom found, building from source"
+            git clone --depth 1 https://github.com/3DSGuy/Project_CTR.git
+            (cd Project_CTR/makerom && make deps && make) || echo "::error::makerom source build failed"
+            cp "$(find Project_CTR/makerom -type f -name makerom -perm -u+x | head -n1)" ./makerom || true
+          fi
+
+          # bannertool: prebuilt release from known repos, otherwise build from source
+          for repo in Steveice10/bannertool Epicpkmn11/bannertool diasurgical/bannertool; do
+            [ -s bannertool ] && break
+            url=$(find_asset "$repo" '^bannertool.*\.zip$')
+            cat diag.txt 2>/dev/null; rm -f diag.txt
+            if echo "$url" | grep -q '^https'; then
+              rm -rf bt && curl -fsSL -o bannertool.zip "$url" && unzip -o -q bannertool.zip -d bt
+              cp "$(find bt -type f -path '*linux*' -name bannertool | head -n1)" ./bannertool || true
+            fi
+          done
+          if [ ! -s bannertool ]; then
+            echo "::warning::No prebuilt bannertool found, building from source"
+            for repo in Steveice10/bannertool Epicpkmn11/bannertool diasurgical/bannertool; do
+              git clone --depth 1 --recursive "https://github.com/$repo.git" bt_src && break
+            done
+            (cd bt_src && make) || echo "::error::bannertool source build failed"
+            cp "$(find bt_src -type f -name bannertool -perm -u+x | head -n1)" ./bannertool || true
+          fi
+
+          chmod +x makerom bannertool 2>/dev/null || true
+          [ -s makerom ] || { echo "::error::makerom unavailable, CIA will not be built"; exit 1; }
+          [ -s bannertool ] || { echo "::error::bannertool unavailable, CIA will not be built"; exit 1; }
+          ls -l makerom bannertool
 
       - name: Configure
         run: |
@@ -61,7 +91,14 @@ jobs:
           export PATH="$DEVKITARM/bin:$PATH"
           make -j"$(nproc)"
           make scummvm.3dsx
-          make scummvm.cia MAKEROM="$HOME/tools/makerom" BANNERTOOL="$HOME/tools/bannertool"
+
+      - name: Package CIA
+        if: steps.tools.outcome == 'success'
+        continue-on-error: true
+        run: |
+          export PATH="$DEVKITARM/bin:$PATH"
+          make scummvm.cia MAKEROM="$HOME/tools/makerom" BANNERTOOL="$HOME/tools/bannertool" \
+            || { echo "::error::CIA packaging failed"; exit 1; }
 
       - name: Publish release
         env:
@@ -73,6 +110,7 @@ jobs:
             -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"$GITHUB_SHA\",\"name\":\"Stereo 3DS build $GITHUB_RUN_NUMBER\",\"body\":\"Built from $GITHUB_SHA\"}")
           UPLOAD=$(echo "$REL" | jq -r .upload_url | sed 's/{.*//')
           for f in scummvm.cia scummvm.3dsx; do
+            [ -f "$f" ] || { echo "::warning::$f was not built"; continue; }
             curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" \
               --data-binary @"$f" "$UPLOAD?name=$f" > /dev/null
