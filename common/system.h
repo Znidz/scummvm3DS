@@ -644,6 +644,12 @@ public:
 		* EventTests::staleMousePosition()).
 		*/
 		kFeatureStaleMousePositionWorkaround,
+
+		/**
+		* The backend can display the game screen stereoscopically, using
+		* per-pixel depth supplied through copyRectToScreenDepth().
+		*/
+		kFeatureStereoDepth,
 	};
 
 	/**
@@ -1267,6 +1273,16 @@ public:
 	 * @see getScreenFormat
 	 */
 	virtual void copyRectToScreen(const void *buf, int pitch, int x, int y, int w, int h) = 0;
+
+	/**
+	 * Supply stereoscopic depth for a region of the game screen.
+	 *
+	 * The buffer holds one byte per game pixel, in the same coordinates as
+	 * copyRectToScreen(). 128 is the screen plane, lower values are further
+	 * away and higher values are nearer the viewer. The depth is reset to the
+	 * screen plane by initSize(). Only used when kFeatureStereoDepth is set.
+	 */
+	virtual void copyRectToScreenDepth(const void *buf, int pitch, int x, int y, int w, int h) {}
 
 	/**
 	 * Lock the active screen framebuffer and return a Graphics::Surface

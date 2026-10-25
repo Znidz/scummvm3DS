@@ -26,7 +26,8 @@
 #include <malloc.h>
 
 enum {
-	SYSTEM_MODEL_2DS = 3
+	SYSTEM_MODEL_2DS = 3,
+	SYSTEM_MODEL_N2DSXL = 5
 };
 
 // Set the size of the stack.
@@ -40,10 +41,12 @@ int main(int argc, char *argv[]) {
 	cfguInit();
 	gfxInitDefault();
 
-	// 800px wide top screen is not available on old 2DS systems
+	// The stereoscopic display cannot be combined with the 800px wide top
+	// screen mode, and neither exists on 2DS systems
 	u8 systemModel = 0;
 	CFGU_GetSystemModel(&systemModel);
-	gfxSetWide(systemModel != SYSTEM_MODEL_2DS);
+	gfxSetWide(false);
+	gfxSet3D(systemModel != SYSTEM_MODEL_2DS && systemModel != SYSTEM_MODEL_N2DSXL);
 
 	romfsInit();
 	osSetSpeedupEnable(true);

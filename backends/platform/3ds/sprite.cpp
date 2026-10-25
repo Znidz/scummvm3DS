@@ -143,6 +143,16 @@ void Sprite::setScale (float x, float y) {
 	}
 }
 
+void Sprite::copyTransform(const Sprite &other) {
+	posX = other.posX;
+	posY = other.posY;
+	offsetX = other.offsetX;
+	offsetY = other.offsetY;
+	scaleX = other.scaleX;
+	scaleY = other.scaleY;
+	dirtyMatrix = true;
+}
+
 void Sprite::setPosition(int x, int y) {
 	if (x != posX || y != posY) {
 		posX = x;

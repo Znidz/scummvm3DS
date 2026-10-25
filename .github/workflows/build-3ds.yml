@@ -29,17 +29,25 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$HOME/tools" && cd "$HOME/tools"
+          # Search every release, since Project_CTR publishes each tool separately
           asset() {
             curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/$1/releases/$2" \
-              | jq -r ".assets[] | select(.name | test(\"$3\")) | .browser_download_url" | head -n1
+              "https://api.github.com/repos/$1/releases?per_page=50" > releases.json
+            echo "Assets in $1:" >&2
+            jq -r '.[].assets[].name' releases.json | head -n 30 >&2
+            url=$(jq -r --arg p "$2" '[.[].assets[] | select(.name | test($p; "i"))][0].browser_download_url // empty' releases.json)
+            if [ -z "$url" ]; then echo "No asset matching $2 in $1" >&2; exit 1; fi
+            echo "Using $url" >&2
+            echo "$url"
           }
-          curl -fsSL -o makerom.zip "$(asset 3DSGuy/Project_CTR latest 'makerom.*ubuntu.*x86_64.*zip')"
-          unzip -o makerom.zip
-          curl -fsSL -o bannertool.zip "$(asset Steveice10/bannertool latest 'bannertool.*zip')"
-          unzip -o bannertool.zip
-          cp linux-x86_64/bannertool ./bannertool
+          curl -fsSL -o makerom.zip "$(asset 3DSGuy/Project_CTR '^makerom.*(ubuntu|linux).*x86_64.*\.zip$')"
+          unzip -o makerom.zip -d makerom_files
+          curl -fsSL -o bannertool.zip "$(asset Steveice10/bannertool '^bannertool.*\.zip$')"
+          unzip -o bannertool.zip -d bannertool_files
+          cp "$(find makerom_files -type f -name makerom | head -n1)" ./makerom
+          cp "$(find bannertool_files -type f -path '*linux*' -name bannertool | head -n1)" ./bannertool
           chmod +x makerom bannertool
+          ./makerom -h | head -n 3 || true
           ls -l
 
       - name: Configure

@@ -52,6 +52,7 @@ public:
 	void setPosition(int x, int y);
 	void setOffset(uint16 x, uint16 y);
 	void setScale(float x, float y);
+	void copyTransform(const Sprite &other);
 	float getScaleX() const { return scaleX; }
 	float getScaleY() const { return scaleY; }
 	int getPosX() const { return posX; }

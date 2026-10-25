@@ -161,6 +161,8 @@ public:
 	void grabPalette(byte *colors, uint start, uint num) const;
 	void copyRectToScreen(const void *buf, int pitch, int x, int y, int w,
 	                      int h);
+	void copyRectToScreenDepth(const void *buf, int pitch, int x, int y, int w,
+	                           int h) override;
 	Graphics::Surface *lockScreen();
 	void unlockScreen();
 	void fillScreen(uint32 col);
@@ -213,6 +215,12 @@ private:
 
 	void flushGameScreen();
 	void flushCursor();
+
+	// Stereoscopic 3D
+	void blitGameRect(Sprite &texture, const Graphics::Surface &src, const Common::Rect &r);
+	void stereoWarp(int eye);
+	void updateStereoSlider();
+	void renderTopScreen(Sprite &gameTexture);
 
 	virtual Common::Path getDefaultLogFileName();
 	virtual Common::WriteStream *createLogFile();
@@ -271,6 +279,18 @@ private:
 	C3D_Mtx _projectionBottom;
 	C3D_RenderTarget* _renderTargetTop;
 	C3D_RenderTarget* _renderTargetBottom;
+
+	// Stereoscopic 3D: the game screen is warped by per-pixel depth into
+	// a left and a right image, shown on the two halves of the top screen.
+	C3D_RenderTarget* _renderTargetTopRight;
+	Sprite _gameTopTextureRight;
+	Graphics::Surface _gameDepth;
+	Graphics::Surface _stereoEye;
+	bool _stereoAvailable;
+	bool _stereoDepthActive;
+	bool _stereoWarped;
+	float _stereoSlider;
+	int8 _stereoShift[2][256];
 
 	// Focus
 	Common::Rect _focusRect;

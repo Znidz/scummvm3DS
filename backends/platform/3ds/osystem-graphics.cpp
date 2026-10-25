@@ -75,6 +75,15 @@ void OSystem_3DS::init3DSGraphics() {
 	C3D_RenderTargetSetOutput(_renderTargetTop, GFX_TOP, GFX_LEFT,
 	                          DISPLAY_TRANSFER_FLAGS);
 
+	_stereoAvailable = gfxIs3D() && !gfxIsWide();
+	if (_stereoAvailable) {
+		_renderTargetTopRight =
+		    C3D_RenderTargetCreate(240, 400, GPU_RB_RGB8, -1);
+		C3D_RenderTargetClear(_renderTargetTopRight, C3D_CLEAR_ALL, 0x0000000, 0);
+		C3D_RenderTargetSetOutput(_renderTargetTopRight, GFX_TOP, GFX_RIGHT,
+		                          DISPLAY_TRANSFER_FLAGS);
+	}
+
 	_renderTargetBottom =
 	    C3D_RenderTargetCreate(240, 320, GPU_RB_RGB8, -1);
 	C3D_RenderTargetClear(_renderTargetBottom, C3D_CLEAR_ALL, 0x00000000, 0);
@@ -111,6 +120,8 @@ void OSystem_3DS::init3DSGraphics() {
 
 void OSystem_3DS::destroy3DSGraphics() {
 	_gameScreen.free();
+	_gameDepth.free();
+	_stereoEye.free();
 	_cursor.free();
 
 	shaderProgramFree(&_program);
@@ -118,6 +129,8 @@ void OSystem_3DS::destroy3DSGraphics() {
 
 	C3D_RenderTargetDelete(_renderTargetTop);
 	C3D_RenderTargetDelete(_renderTargetBottom);
+	if (_renderTargetTopRight)
+		C3D_RenderTargetDelete(_renderTargetTopRight);
 
 	C3D_Fini();
 }
@@ -128,7 +141,8 @@ bool OSystem_3DS::hasFeature(OSystem::Feature f) {
 	        f == OSystem::kFeatureFilteringMode ||
 	        f == OSystem::kFeatureOverlaySupportsAlpha ||
 	        f == OSystem::kFeatureKbdMouseSpeed ||
-	        f == OSystem::kFeatureJoystickDeadzone);
+	        f == OSystem::kFeatureJoystickDeadzone ||
+	        (f == OSystem::kFeatureStereoDepth && _stereoAvailable));
 }
 
 void OSystem_3DS::setFeatureState(OSystem::Feature f, bool enable) {
@@ -221,6 +235,20 @@ void OSystem_3DS::initSize(uint width, uint height,
 		_gameScreen.create(width, height, _pfGame);
 
 	_blitFunc = Graphics::getFastBlitFunc(_gameTopTexture.format, _pfGame);
+
+	// Depth starts flat at the screen plane until the engine supplies some
+	_stereoDepthActive = false;
+	_stereoWarped = false;
+	if (_stereoAvailable && _pfGame.isCLUT8()) {
+		_gameTopTextureRight.create(width, height, _gfxState.gfxMode, true);
+		_gameDepth.create(width, height, _pfGame);
+		_stereoEye.create(width, height, _pfGame);
+		memset(_gameDepth.getPixels(), 128, _gameDepth.pitch * _gameDepth.h);
+	} else {
+		_gameTopTextureRight.free();
+		_gameDepth.free();
+		_stereoEye.free();
+	}
 
 	_focusDirty = true;
 	_focusRect = Common::Rect(_gameWidth, _gameHeight);
@@ -394,29 +422,125 @@ void OSystem_3DS::copyRectToScreen(const void *buf, int pitch, int x,
 	_dirtyRects.emplace_back(x, y, x + w, y + h);
 }
 
+void OSystem_3DS::copyRectToScreenDepth(const void *buf, int pitch, int x,
+										int y, int w, int h) {
+	if (!_gameDepth.getPixels())
+		return;
+
+	_gameDepth.copyRectToSurface(buf, pitch, x, y, w, h);
+	_stereoDepthActive = true;
+	// Moving a pixel's depth moves it on screen, so redraw the whole frame
+	_dirtyRects.emplace_back(getWidth(), getHeight());
+}
+
+void OSystem_3DS::blitGameRect(Sprite &texture, const Graphics::Surface &src, const Common::Rect &r) {
+	const byte *s = (const byte *)src.getBasePtr(r.left, r.top);
+	byte *d = (byte *)texture.getBasePtr(r.left, r.top);
+
+	if (_blitFunc) {
+		_blitFunc(d, s, texture.pitch, src.pitch, r.width(), r.height());
+	} else if (_gfxState.gfxMode == &_modeCLUT8) {
+		Graphics::crossBlitMap(d, s, texture.pitch, src.pitch,
+			r.width(), r.height(), texture.format.bytesPerPixel, _paletteMap);
+	} else {
+		Graphics::crossBlit(d, s, texture.pitch, src.pitch,
+			r.width(), r.height(), texture.format, src.format);
+	}
+	texture.markDirty();
+}
+
+// Builds one eye's view in _stereoEye by moving every pixel sideways by an
+// amount that depends on its depth. Nearer pixels win where two land on the
+// same spot, and gaps opened up behind near objects are filled from the
+// farther of the two neighbouring pixels.
+void OSystem_3DS::stereoWarp(int eye) {
+	const int8 *shift = _stereoShift[eye];
+	const int w = _gameScreen.w;
+	int16 *rowDepth = new int16[w];
+
+	for (int y = 0; y < _gameScreen.h; ++y) {
+		const byte *src = (const byte *)_gameScreen.getBasePtr(0, y);
+		const byte *depth = (const byte *)_gameDepth.getBasePtr(0, y);
+		byte *dst = (byte *)_stereoEye.getBasePtr(0, y);
+
+		for (int x = 0; x < w; ++x)
+			rowDepth[x] = -1;
+
+		for (int x = 0; x < w; ++x) {
+			const int nx = x + shift[depth[x]];
+			if (nx >= 0 && nx < w && depth[x] >= rowDepth[nx]) {
+				dst[nx] = src[x];
+				rowDepth[nx] = depth[x];
+			}
+		}
+
+		for (int x = 0; x < w; ++x) {
+			if (rowDepth[x] >= 0)
+				continue;
+			int right = x + 1;
+			while (right < w && rowDepth[right] < 0)
+				++right;
+			const bool hasLeft = x > 0;
+			const bool hasRight = right < w;
+			if (hasLeft && (!hasRight || rowDepth[x - 1] <= rowDepth[right])) {
+				dst[x] = dst[x - 1];
+				rowDepth[x] = rowDepth[x - 1];
+			} else if (hasRight) {
+				dst[x] = dst[right];
+				rowDepth[x] = rowDepth[right];
+			} else {
+				dst[x] = src[x];
+				rowDepth[x] = depth[x];
+			}
+		}
+	}
+
+	delete[] rowDepth;
+}
+
+// Reads the 3D slider and works out how far each depth value moves each eye.
+// At full slider, the furthest depth (0) is separated by kMaxSeparation game
+// pixels behind the screen and the nearest (255) the same amount in front.
+void OSystem_3DS::updateStereoSlider() {
+	static const float kMaxSeparation = 8.f;
+
+	float slider = _stereoAvailable ? osGet3DSliderState() : 0.f;
+	if (slider < 0.02f)
+		slider = 0.f;
+	const float change = slider - _stereoSlider;
+	if (change < 0.02f && change > -0.02f && (slider > 0.f) == (_stereoSlider > 0.f))
+		return;
+
+	_stereoSlider = slider;
+	for (int d = 0; d < 256; ++d) {
+		const float exact = (d - 128) * slider * kMaxSeparation / 128.f;
+		const int separation = (int)(exact + (exact < 0.f ? -0.5f : 0.5f));
+		_stereoShift[0][d] = separation / 2;
+		_stereoShift[1][d] = separation / 2 - separation;
+	}
+
+	if (_stereoDepthActive)
+		_dirtyRects.emplace_back(getWidth(), getHeight());
+}
+
 void OSystem_3DS::flushGameScreen() {
 	if (_pfGame == _gameTopTexture.format)
 		return;
 
 	_dirtyRects.merge();
 
-	for (const Common::Rect &r : _dirtyRects) {
-		const byte *src = (const byte *)_gameScreen.getBasePtr(r.left, r.top);
-		byte *dst = (byte *)_gameTopTexture.getBasePtr(r.left, r.top);
-
-		if (_blitFunc) {
-			_blitFunc(dst, src, _gameTopTexture.pitch, _gameScreen.pitch,
-				r.width(), r.height());
-		} else if (_gfxState.gfxMode == &_modeCLUT8) {
-			Graphics::crossBlitMap(dst, src, _gameTopTexture.pitch, _gameScreen.pitch,
-				r.width(), r.height(), _gameTopTexture.format.bytesPerPixel, _paletteMap);
-		} else {
-			Graphics::crossBlit(dst, src, _gameTopTexture.pitch, _gameScreen.pitch,
-				r.width(), r.height(), _gameTopTexture.format, _pfGame);
-		}
+	_stereoWarped = _stereoDepthActive && _stereoSlider > 0.f && _stereoEye.getPixels();
+	if (_stereoWarped) {
+		const Common::Rect full(getWidth(), getHeight());
+		stereoWarp(0);
+		blitGameRect(_gameTopTexture, _stereoEye, full);
+		stereoWarp(1);
+		blitGameRect(_gameTopTextureRight, _stereoEye, full);
+		return;
 	}
 
-	_gameTopTexture.markDirty();
+	for (const Common::Rect &r : _dirtyRects)
+		blitGameRect(_gameTopTexture, _gameScreen, r);
 }
 
 Graphics::Surface *OSystem_3DS::lockScreen() {
@@ -438,6 +562,8 @@ void OSystem_3DS::updateScreen() {
 		return;
 	}
 
+	updateStereoSlider();
+
 	if (!_dirtyRects.empty()) {
 		flushGameScreen();
 		_dirtyRects.clear();
@@ -452,6 +578,10 @@ void OSystem_3DS::updateScreen() {
 
 	C3D_FrameBegin(0);
 		_gameTopTexture.transfer();
+		if (_stereoWarped) {
+			_gameTopTextureRight.copyTransform(_gameTopTexture);
+			_gameTopTextureRight.transfer();
+		}
 		if (_overlayVisible) {
 			_overlay.transfer();
 		}
@@ -463,33 +593,16 @@ void OSystem_3DS::updateScreen() {
 	C3D_FrameEnd(0);
 
 	C3D_FrameBegin(0);
-		// Render top screen
+		// Render top screen, once per eye. Without stereo depth both eyes
+		// see the same image, which is the normal flat picture.
 		C3D_RenderTargetClear(_renderTargetTop, C3D_CLEAR_ALL, 0x00000000, 0);
 		C3D_FrameDrawOn(_renderTargetTop);
-		if (_screen == kScreenTop || _screen == kScreenBoth) {
-			C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _projectionLocation, &_projectionTop);
-			C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _gameTopTexture.getMatrix());
-			_gameTopTexture.setFilteringMode(_magnifyMode != MODE_MAGON && _filteringEnabled);
-			_gameTopTexture.render();
-			if (_overlayVisible && _screen == kScreenTop) {
-				C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _overlay.getMatrix());
-				_overlay.render();
-			}
-			if (_activityIcon.getPixels() && _screen == kScreenTop) {
-				_activityIcon.setPosition(400 - _activityIcon.actualWidth, 0);
-				C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _activityIcon.getMatrix());
-				_activityIcon.render();
-			}
-			if (_osdMessage.getPixels() && _screen == kScreenTop) {
-				_osdMessage.setPosition((400 - _osdMessage.actualWidth) / 2, (240 - _osdMessage.actualHeight) / 2);
-				C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _osdMessage.getMatrix());
-				_osdMessage.render();
-			}
-			if (_cursorVisible && _showCursor && _screen == kScreenTop) {
-				C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _cursorTexture.getMatrix());
-				_cursorTexture.setFilteringMode(!_overlayInGUI && _filteringEnabled);
-				_cursorTexture.render();
-			}
+		renderTopScreen(_gameTopTexture);
+
+		if (_renderTargetTopRight) {
+			C3D_RenderTargetClear(_renderTargetTopRight, C3D_CLEAR_ALL, 0x00000000, 0);
+			C3D_FrameDrawOn(_renderTargetTopRight);
+			renderTopScreen(_stereoWarped ? _gameTopTextureRight : _gameTopTexture);
 		}
 
 		// Render bottom screen
@@ -521,6 +634,35 @@ void OSystem_3DS::updateScreen() {
 			}
 		}
 	C3D_FrameEnd(0);
+}
+
+void OSystem_3DS::renderTopScreen(Sprite &gameTexture) {
+	if (_screen != kScreenTop && _screen != kScreenBoth)
+		return;
+
+	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _projectionLocation, &_projectionTop);
+	C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, gameTexture.getMatrix());
+	gameTexture.setFilteringMode(_magnifyMode != MODE_MAGON && _filteringEnabled);
+	gameTexture.render();
+	if (_overlayVisible && _screen == kScreenTop) {
+		C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _overlay.getMatrix());
+		_overlay.render();
+	}
+	if (_activityIcon.getPixels() && _screen == kScreenTop) {
+		_activityIcon.setPosition(400 - _activityIcon.actualWidth, 0);
+		C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _activityIcon.getMatrix());
+		_activityIcon.render();
+	}
+	if (_osdMessage.getPixels() && _screen == kScreenTop) {
+		_osdMessage.setPosition((400 - _osdMessage.actualWidth) / 2, (240 - _osdMessage.actualHeight) / 2);
+		C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _osdMessage.getMatrix());
+		_osdMessage.render();
+	}
+	if (_cursorVisible && _showCursor && _screen == kScreenTop) {
+		C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, _modelviewLocation, _cursorTexture.getMatrix());
+		_cursorTexture.setFilteringMode(!_overlayInGUI && _filteringEnabled);
+		_cursorTexture.render();
+	}
 }
 
 void OSystem_3DS::setShakePos(int shakeXOffset, int shakeYOffset) {
