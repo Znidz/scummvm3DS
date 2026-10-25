@@ -1,11 +1,11 @@
 BasicInfo:
-  Title                   : ScummVM
-  ProductCode             : ScummVM
+  Title                   : ScummVM 3D
+  ProductCode             : ScummVM3D
   Logo                    : Nintendo # Nintendo / Licensed / Distributed / iQue / iQueForSystem
 
 TitleInfo:
   Category                : Application
-  UniqueId                : 0xFF321
+  UniqueId                : 0xFF3D3 # differs from the official build so both can be installed
 
 RomFs:
   # Specifies the root path of the read only file system to include in the ROM.

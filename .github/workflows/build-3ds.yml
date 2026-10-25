@@ -144,11 +144,13 @@ jobs:
           TAG="stereo3d-${GITHUB_RUN_NUMBER}"
           API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
           REL=$(curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" "$API/releases" \
-            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"$GITHUB_SHA\",\"name\":\"Stereo 3DS build $GITHUB_RUN_NUMBER\",\"body\":\"Built from $GITHUB_SHA\"}")
+            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"$GITHUB_SHA\",\"name\":\"ScummVM 3D build $GITHUB_RUN_NUMBER\",\"body\":\"Built from $GITHUB_SHA\"}")
           UPLOAD=$(echo "$REL" | jq -r .upload_url | sed 's/{.*//')
+          # Published as scummvm3d.* so they never overwrite an official scummvm.* file
           for f in scummvm.cia scummvm.3dsx; do
             [ -f "$f" ] || { echo "::warning::$f was not built"; continue; }
+            name="scummvm3d.${f##*.}"
             curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" \
               -H "Content-Type: application/octet-stream" \
-              --data-binary @"$f" "$UPLOAD?name=$f" > /dev/null
+              --data-binary @"$f" "$UPLOAD?name=$name" > /dev/null
           done

@@ -1,7 +1,7 @@
 TARGET := scummvm
 
-APP_TITLE       := ScummVM
-APP_DESCRIPTION := Point-and-click adventure game engines
+APP_TITLE       := ScummVM 3D
+APP_DESCRIPTION := Stereoscopic 3D build
 APP_AUTHOR      := ScummVM Team
 APP_ICON        := $(srcdir)/backends/platform/3ds/app/icon.png
 
