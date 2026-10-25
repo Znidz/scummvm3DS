@@ -792,6 +792,15 @@ public:
 	void setStereoRoom(const uint8 *mask, const uint8 *layerTable);
 	void setStereoShapeGroundY(int y);
 
+	// Stereoscopic depth for the first person view of Eye of the Beholder
+	// and Lands of Lore. The engine fills the view's depth while drawing it,
+	// using stages: anything a stage changes on the page gets its depth.
+	void setStereoViewport(int x, int y, int w, int h);
+	uint8 *getStereoViewDepth() { return _stereoViewDepth; }
+	void stereoBeginStage(int pageNum, int x1, int x2);
+	void stereoEndStage(int pageNum, uint8 depth);
+	void stereoViewDone(int pageNum);
+
 	virtual byte getShapeFlag1(int x, int y);
 	virtual byte getShapeFlag2(int x, int y);
 
@@ -1000,6 +1009,14 @@ protected:
 	uint8 _stereoShapeTag;
 	DsPlotFunc _dsStereoPlot;
 	bool _dsStereoPriority;
+
+	int _stereoViewX, _stereoViewY, _stereoViewW, _stereoViewH;
+	int _stereoStageX1, _stereoStageX2;
+	uint8 *_stereoViewDepth;
+	uint8 *_stereoViewStage;
+	uint8 *_stereoViewPixels;
+	uint8 *_stereoViewShownDepth;
+	bool _stereoViewValid;
 
 	bool isStereoPage(int pageNum) const;
 	void setStereoTags(int x, int y, int w, int h, uint8 tag);

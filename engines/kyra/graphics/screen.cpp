@@ -65,6 +65,10 @@ Screen::Screen(KyraEngine_v1 *vm, OSystem *system, const ScreenDim *dimTable, co
 	_stereoShapeTag = 0;
 	_dsStereoPlot = nullptr;
 	_dsStereoPriority = false;
+	_stereoViewX = _stereoViewY = _stereoViewW = _stereoViewH = 0;
+	_stereoStageX1 = _stereoStageX2 = 0;
+	_stereoViewDepth = _stereoViewStage = _stereoViewPixels = _stereoViewShownDepth = nullptr;
+	_stereoViewValid = false;
 
 	memset(_shapePages, 0, sizeof(_shapePages));
 	memset(_fonts, 0, sizeof(_fonts));
@@ -121,6 +125,10 @@ Screen::~Screen() {
 	delete[] _stereoTags;
 	delete[] _stereoMask;
 	delete[] _stereoDepth;
+	delete[] _stereoViewDepth;
+	delete[] _stereoViewStage;
+	delete[] _stereoViewPixels;
+	delete[] _stereoViewShownDepth;
 
 	for (int f = 0; f < ARRAYSIZE(_fonts); ++f)
 		delete _fonts[f];
@@ -3386,9 +3394,111 @@ void Screen::drawShapePlotStereo(uint8 *dst, uint8 cmd) {
 	_stereoTags[relOffs] = _stereoShapeTag;
 }
 
+void Screen::setStereoViewport(int x, int y, int w, int h) {
+	if (!_stereoTags || _stereoViewDepth)
+		return;
+	if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > SCREEN_W || y + h > SCREEN_H)
+		return;
+
+	_stereoViewX = x;
+	_stereoViewY = y;
+	_stereoViewW = w;
+	_stereoViewH = h;
+	_stereoViewDepth = new uint8[w * h];
+	_stereoViewStage = new uint8[w * h];
+	_stereoViewPixels = new uint8[w * h];
+	_stereoViewShownDepth = new uint8[w * h];
+	memset(_stereoViewDepth, kStereoFlatDepth, w * h);
+}
+
+void Screen::stereoBeginStage(int pageNum, int x1, int x2) {
+	if (!_stereoViewDepth)
+		return;
+
+	_stereoStageX1 = CLIP(x1 - _stereoViewX, 0, _stereoViewW);
+	_stereoStageX2 = CLIP(x2 - _stereoViewX, 0, _stereoViewW);
+	const int w = _stereoStageX2 - _stereoStageX1;
+	if (w <= 0)
+		return;
+
+	const uint8 *src = getCPagePtr(pageNum) + _stereoViewY * SCREEN_W + _stereoViewX + _stereoStageX1;
+	uint8 *dst = _stereoViewStage + _stereoStageX1;
+	for (int y = 0; y < _stereoViewH; ++y) {
+		memcpy(dst, src, w);
+		src += SCREEN_W;
+		dst += _stereoViewW;
+	}
+}
+
+void Screen::stereoEndStage(int pageNum, uint8 depth) {
+	if (!_stereoViewDepth)
+		return;
+
+	const int w = _stereoStageX2 - _stereoStageX1;
+	if (w <= 0)
+		return;
+
+	const uint8 *page = getCPagePtr(pageNum) + _stereoViewY * SCREEN_W + _stereoViewX + _stereoStageX1;
+	const uint8 *before = _stereoViewStage + _stereoStageX1;
+	uint8 *out = _stereoViewDepth + _stereoStageX1;
+	for (int y = 0; y < _stereoViewH; ++y) {
+		if (memcmp(page, before, w)) {
+			for (int x = 0; x < w; ++x) {
+				if (page[x] != before[x])
+					out[x] = depth;
+			}
+		}
+		page += SCREEN_W;
+		before += _stereoViewW;
+		out += _stereoViewW;
+	}
+	_stereoStageX1 = _stereoStageX2 = 0;
+}
+
+void Screen::stereoViewDone(int pageNum) {
+	if (!_stereoViewDepth)
+		return;
+
+	const uint8 *src = getCPagePtr(pageNum) + _stereoViewY * SCREEN_W + _stereoViewX;
+	for (int y = 0; y < _stereoViewH; ++y)
+		memcpy(_stereoViewPixels + y * _stereoViewW, src + y * SCREEN_W, _stereoViewW);
+	memcpy(_stereoViewShownDepth, _stereoViewDepth, _stereoViewW * _stereoViewH);
+	_stereoViewValid = true;
+}
+
 void Screen::updateStereoDepth() {
 	const uint8 *page0 = getCPagePtr(0);
 	const uint8 *page2 = getCPagePtr(2);
+
+	// First person view: use the view's depth wherever the screen still shows
+	// the view as it was drawn. Anything drawn over it later stays flat.
+	if (_stereoViewDepth) {
+		memset(_stereoDepth, kStereoFlatDepth, SCREEN_W * SCREEN_H);
+
+		if (_stereoViewValid) {
+			int differing = 0;
+			for (int y = 0; y < _stereoViewH; ++y) {
+				const uint8 *screen = page0 + (_stereoViewY + y) * SCREEN_W + _stereoViewX;
+				const uint8 *view = _stereoViewPixels + y * _stereoViewW;
+				for (int x = 0; x < _stereoViewW; ++x)
+					differing += (screen[x] != view[x]) ? 1 : 0;
+			}
+
+			if (differing < _stereoViewW * _stereoViewH / 4) {
+				for (int y = 0; y < _stereoViewH; ++y) {
+					const uint8 *screen = page0 + (_stereoViewY + y) * SCREEN_W + _stereoViewX;
+					const uint8 *view = _stereoViewPixels + y * _stereoViewW;
+					const uint8 *depth = _stereoViewShownDepth + y * _stereoViewW;
+					uint8 *out = _stereoDepth + (_stereoViewY + y) * SCREEN_W + _stereoViewX;
+					for (int x = 0; x < _stereoViewW; ++x)
+						out[x] = (screen[x] == view[x]) ? depth[x] : kStereoFlatDepth;
+				}
+			}
+		}
+
+		_system->copyRectToScreenDepth(_stereoDepth, SCREEN_W, 0, _yTransOffs, SCREEN_W, _screenHeight - _yTransOffs);
+		return;
+	}
 
 	// Anything on screen that differs from the room page was drawn straight
 	// to the screen, such as menus. If most of the room differs, a room

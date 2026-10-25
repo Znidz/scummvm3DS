@@ -55,6 +55,11 @@ private:
 	GUI::StaticTextWidget *_screenDesc;
 	GUI::PopUpWidget *_screenPopUp;
 
+	GUI::StaticTextWidget *_stereoStrengthDesc;
+	GUI::PopUpWidget *_stereoStrengthPopUp;
+	GUI::StaticTextWidget *_stereoPositionDesc;
+	GUI::PopUpWidget *_stereoPositionPopUp;
+
 	bool _enabled;
 };
 
@@ -70,6 +75,21 @@ N3DSOptionsWidget::N3DSOptionsWidget(GuiObject *boss, const Common::String &name
 	_screenPopUp->appendEntry(_c("Top", "3ds-screen"), kScreenTop);
 	_screenPopUp->appendEntry(_c("Bottom", "3ds-screen"), kScreenBottom);
 	_screenPopUp->appendEntry(_c("Both", "3ds-screen"), kScreenBoth);
+
+	_stereoStrengthDesc = new GUI::StaticTextWidget(widgetsBoss(), "N3DSOptionsDialog.StereoStrengthText", _("3D depth:"));
+	_stereoStrengthPopUp = new GUI::PopUpWidget(widgetsBoss(), "N3DSOptionsDialog.StereoStrength");
+	_stereoStrengthPopUp->appendEntry(_("Half"), 50);
+	_stereoStrengthPopUp->appendEntry(_("Reduced"), 75);
+	_stereoStrengthPopUp->appendEntry(_("Normal"), 100);
+	_stereoStrengthPopUp->appendEntry(_("Strong"), 150);
+	_stereoStrengthPopUp->appendEntry(_("Double"), 200);
+
+	_stereoPositionDesc = new GUI::StaticTextWidget(widgetsBoss(), "N3DSOptionsDialog.StereoPositionText", _("3D position:"));
+	_stereoPositionPopUp = new GUI::PopUpWidget(widgetsBoss(), "N3DSOptionsDialog.StereoPosition");
+	_stereoPositionPopUp->appendEntry(_("Deeper into screen"), 0);
+	_stereoPositionPopUp->appendEntry(_("Normal"), 1);
+	_stereoPositionPopUp->appendEntry(_("Out of screen"), 2);
+	_stereoPositionPopUp->appendEntry(_("Further out of screen"), 3);
 }
 
 N3DSOptionsWidget::~N3DSOptionsWidget() {
@@ -87,6 +107,16 @@ void N3DSOptionsWidget::defineLayout(GUI::ThemeEval &layouts, const Common::Stri
 	            .addWidget("ScreenText", "OptionsLabel")
 	            .addWidget("Screen", "PopUp")
 	        .closeLayout()
+	        .addLayout(GUI::ThemeLayout::kLayoutHorizontal)
+	            .addPadding(16, 16, 0, 0)
+	            .addWidget("StereoStrengthText", "OptionsLabel")
+	            .addWidget("StereoStrength", "PopUp")
+	        .closeLayout()
+	        .addLayout(GUI::ThemeLayout::kLayoutHorizontal)
+	            .addPadding(16, 16, 0, 0)
+	            .addWidget("StereoPositionText", "OptionsLabel")
+	            .addWidget("StereoPosition", "PopUp")
+	        .closeLayout()
 	    .closeLayout()
 	.closeDialog();
 }
@@ -96,6 +126,8 @@ void N3DSOptionsWidget::load() {
 	_snapToBorderCheckbox->setState(ConfMan.getBool("3ds_snaptoborder", _domain));
 	_stretchToFitCheckbox->setState(ConfMan.getBool("3ds_stretchtofit", _domain));
 	_screenPopUp->setSelectedTag(ConfMan.getInt("3ds_screen", _domain));
+	_stereoStrengthPopUp->setSelectedTag(ConfMan.getInt("3ds_stereo_strength", _domain));
+	_stereoPositionPopUp->setSelectedTag(ConfMan.getInt("3ds_stereo_position", _domain));
 }
 
 bool N3DSOptionsWidget::save() {
@@ -104,11 +136,15 @@ bool N3DSOptionsWidget::save() {
 		ConfMan.setBool("3ds_snaptoborder", _snapToBorderCheckbox->getState(), _domain);
 		ConfMan.setBool("3ds_stretchtofit", _stretchToFitCheckbox->getState(), _domain);
 		ConfMan.setInt("3ds_screen", _screenPopUp->getSelectedTag(), _domain);
+		ConfMan.setInt("3ds_stereo_strength", _stereoStrengthPopUp->getSelectedTag(), _domain);
+		ConfMan.setInt("3ds_stereo_position", _stereoPositionPopUp->getSelectedTag(), _domain);
 	} else {
 		ConfMan.removeKey("3ds_showcursor", _domain);
 		ConfMan.removeKey("3ds_snaptoborder", _domain);
 		ConfMan.removeKey("3ds_stretchtofit", _domain);
 		ConfMan.removeKey("3ds_screen", _domain);
+		ConfMan.removeKey("3ds_stereo_strength", _domain);
+		ConfMan.removeKey("3ds_stereo_position", _domain);
 	}
 
 	return true;
@@ -118,7 +154,9 @@ bool N3DSOptionsWidget::hasKeys() {
 	return ConfMan.hasKey("3ds_showcursor", _domain) ||
 	       ConfMan.hasKey("3ds_snaptoborder", _domain) ||
 	       ConfMan.hasKey("3ds_stretchtofit", _domain) ||
-	       ConfMan.hasKey("3ds_screen", _domain);
+	       ConfMan.hasKey("3ds_screen", _domain) ||
+	       ConfMan.hasKey("3ds_stereo_strength", _domain) ||
+	       ConfMan.hasKey("3ds_stereo_position", _domain);
 }
 
 void N3DSOptionsWidget::setEnabled(bool e) {
@@ -129,6 +167,10 @@ void N3DSOptionsWidget::setEnabled(bool e) {
 	_stretchToFitCheckbox->setEnabled(e);
 	_screenDesc->setEnabled(e);
 	_screenPopUp->setEnabled(e);
+	_stereoStrengthDesc->setEnabled(e);
+	_stereoStrengthPopUp->setEnabled(e);
+	_stereoPositionDesc->setEnabled(e);
+	_stereoPositionPopUp->setEnabled(e);
 }
 
 
@@ -141,6 +183,8 @@ void OSystem_3DS::registerDefaultSettings(const Common::String &target) const {
 	ConfMan.registerDefault("3ds_snaptoborder", true);
 	ConfMan.registerDefault("3ds_stretchtofit", false);
 	ConfMan.registerDefault("3ds_screen", kScreenBoth);
+	ConfMan.registerDefault("3ds_stereo_strength", 100);
+	ConfMan.registerDefault("3ds_stereo_position", 1);
 }
 
 void OSystem_3DS::applyBackendSettings() {
@@ -150,6 +194,12 @@ void OSystem_3DS::applyBackendSettings() {
 	_snapToBorder = ConfMan.getBool("3ds_snaptoborder");
 	_stretchToFit = ConfMan.getBool("3ds_stretchtofit");
 	_screen = (Screen)ConfMan.getInt("3ds_screen");
+	_stereoStrength = CLIP(ConfMan.getInt("3ds_stereo_strength"), 10, 300);
+	// Moves the whole scene towards the viewer, in depth units
+	static const int kStereoPositions[] = { -32, 0, 32, 64 };
+	_stereoPosition = kStereoPositions[CLIP(ConfMan.getInt("3ds_stereo_position"), 0, 3)];
+	// Make the next screen update recalculate the eye shifts
+	_stereoSlider = -1.f;
 
 	updateBacklight();
 	updateConfig();

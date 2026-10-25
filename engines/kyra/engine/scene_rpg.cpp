@@ -125,6 +125,84 @@ void KyraRpgEngine::drawLevelModifyScreenDim(int dim, int16 x1, int16 y1, int16 
 	screen()->modifyScreenDim(dim, x1, y1 << 3, x2 - x1, (y2 - y1) << 3);
 }
 
+#pragma mark - Stereoscopic depth
+
+namespace {
+// Distances in the first person view, in units where the nearest wall face
+// straight ahead is 1. They follow from the heights the walls are drawn at:
+// faces one, two and three blocks ahead are 96, 64 and 40 pixels tall, and
+// the eye level is 32 pixels from the top of the view.
+const float kViewFaceZ[4] = { 2.4f, 1.5f, 1.0f, 0.8f };
+const float kViewCentreZ[4] = { 2.85f, 1.95f, 1.25f, 0.9f };
+// Near and far distance of the walls drawn with each _vmpVisOffs entry
+const float kViewWallZ[9][2] = {
+	{ 2.4f, 3.3f }, { 2.4f, 3.3f }, { 2.4f, 2.4f },
+	{ 1.5f, 2.4f }, { 1.5f, 2.4f }, { 1.5f, 1.5f },
+	{ 1.0f, 1.5f }, { 1.0f, 1.0f }, { 0.8f, 1.0f }
+};
+
+uint8 viewDepthForZ(float z) {
+	// The nearest wall face straight ahead sits on the screen plane
+	const int depth = (int)(128.f + 155.f * (1.f / z - 1.f));
+	return (uint8)CLIP<int>(depth, 1, 190);
+}
+
+int viewRow(int block) {
+	return block < 7 ? 0 : (block < 12 ? 1 : (block < 15 ? 2 : 3));
+}
+
+uint8 stereoFloorCeilingDepth(int tileRow) {
+	const int y = tileRow * 8 + 4;
+	float z = 3.3f;
+	if (y > 32)
+		z = 72.f / (y - 32);
+	else if (y < 32)
+		z = 24.f / (32 - y);
+	return viewDepthForZ(CLIP(z, 0.8f, 3.3f));
+}
+} // End of anonymous namespace
+
+void KyraRpgEngine::stereoInit() {
+	if (_stereoInitDone)
+		return;
+	_stereoInitDone = true;
+	screen()->enableStereoDepth();
+	screen()->setStereoViewport(_sceneXoffset, 0, 176, 120);
+}
+
+bool KyraRpgEngine::stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *depths) const {
+	if (startBlockY >= 15 || !numBlocksX || numBlocksX > 22)
+		return false;
+
+	int k = 0;
+	while (k < 9 && _vmpVisOffs[k] != vmpOffset)
+		++k;
+	if (k == 9)
+		return false;
+
+	// Side walls run from near at the outer edge to far at the inner edge
+	for (int i = 0; i < numBlocksX; ++i) {
+		float t = (i + 0.5f) / numBlocksX;
+		if (flipped)
+			t = 1.f - t;
+		depths[i] = viewDepthForZ(kViewWallZ[k][0] + (kViewWallZ[k][1] - kViewWallZ[k][0]) * t);
+	}
+	return true;
+}
+
+uint8 KyraRpgEngine::stereoBlockDepth(int block, bool face) const {
+	const int row = viewRow(block);
+	return viewDepthForZ(face ? kViewFaceZ[row] : kViewCentreZ[row]);
+}
+
+void KyraRpgEngine::stereoBeginStage() {
+	screen()->stereoBeginStage(_sceneDrawPage1, _shpDmX1 << 3, _shpDmX2 << 3);
+}
+
+void KyraRpgEngine::stereoEndStage(int block, bool face) {
+	screen()->stereoEndStage(_sceneDrawPage1, stereoBlockDepth(block, face));
+}
+
 void KyraRpgEngine::generateBlockDrawingBuffer() {
 	_sceneDrawVarDown = _dscBlockMap[_currentDirection];
 	_sceneDrawVarRight = _dscBlockMap[_currentDirection + 4];
@@ -148,6 +226,7 @@ void KyraRpgEngine::generateBlockDrawingBuffer() {
 	********************************************/
 
 	memset(_blockDrawingBuffer, 0, 660 * sizeof(uint16));
+	memset(_vcnDepth, 0, sizeof(_vcnDepth));
 
 	_wllProcessFlag = ((_currentBlock >> 5) + (_currentBlock & 0x1F) + _currentDirection) & 1;
 
@@ -272,11 +351,17 @@ void KyraRpgEngine::generateVmpTileData(int16 startBlockX, uint8 startBlockY, ui
 
 	uint16 *vmp = &_vmpPtr[(_wllVmpMap[vmpMapIndex] - 1) * 431 + vmpOffset + 330];
 
+	uint8 depths[22];
+	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, false, depths);
+
 	for (int i = 0; i < numBlocksY; i++) {
 		uint16 *bl = &_blockDrawingBuffer[(startBlockY + i) * 22 + startBlockX];
 		for (int ii = 0; ii < numBlocksX; ii++) {
-			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp)
+			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp) {
 				*bl = *vmp;
+				if (hasDepth)
+					_vcnDepth[(startBlockY + i) * 22 + startBlockX + ii] = depths[ii];
+			}
 			bl++;
 			vmp++;
 		}
@@ -290,12 +375,18 @@ void KyraRpgEngine::generateVmpTileDataFlipped(int16 startBlockX, uint8 startBlo
 	uint16 *vmp = &_vmpPtr[(_wllVmpMap[vmpMapIndex] - 1) * 431 + vmpOffset + 330] + (numBlocksX - 1);
 	uint16 *bl = &_blockDrawingBuffer[startBlockY * 22 + startBlockX];
 
+	uint8 depths[22];
+	const bool hasDepth = stereoWallColumnDepths(startBlockY, vmpOffset, numBlocksX, true, depths);
+
 	for (int i = 0; i < numBlocksY; i++) {
 		uint16 *bl2 = bl;
 		uint16 *vmpb = vmp;
 		for (int ii = 0; ii < numBlocksX; ii++) {
-			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp)
+			if ((startBlockX + ii >= 0) && (startBlockX + ii < 22) && *vmp) {
 				*bl = (*vmp & 0x4000) ? *vmp - 0x4000 : *vmp | 0x4000;
+				if (hasDepth)
+					_vcnDepth[(startBlockY + i) * 22 + startBlockX + ii] = depths[ii];
+			}
 			bl++;
 			vmp--;
 		}
@@ -451,6 +542,19 @@ void KyraRpgEngine::drawVcnBlocks() {
 	}
 
 	screen()->copyBlockToPage(_sceneDrawPage1, _sceneXoffset, 0, 176, 120, _sceneWindowBuffer);
+
+	stereoInit();
+	if (uint8 *viewDepth = screen()->getStereoViewDepth()) {
+		for (int y = 0; y < 15; y++) {
+			for (int x = 0; x < 22; x++) {
+				const int i = y * 22 + x;
+				const uint8 depth = (_blockDrawingBuffer[i] && _vcnDepth[i]) ? _vcnDepth[i] : stereoFloorCeilingDepth(y);
+				uint8 *dst = viewDepth + (y << 3) * 176 + (x << 3);
+				for (int blockY = 0; blockY < 8; blockY++)
+					memset(dst + blockY * 176, depth, 8);
+			}
+		}
+	}
 }
 
 void KyraRpgEngine::vcnDraw_fw_4bit(uint8 *&dst, const uint8 *&src) {

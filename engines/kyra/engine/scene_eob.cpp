@@ -633,18 +633,31 @@ void EoBCoreEngine::drawSceneShapes(int start, int end, int drawFlags) {
 		if (_shpDmX2 <= _shpDmX1)
 			continue;
 
-		if (drawFlags & 0x01)
+		if (drawFlags & 0x01) {
+			stereoBeginStage();
 			drawDecorations(t);
+			stereoEndStage(t, true);
+		}
 
-		if ((drawFlags & 0x02) && _visibleBlocks[t]->drawObjects)
+		if ((drawFlags & 0x02) && _visibleBlocks[t]->drawObjects) {
+			stereoBeginStage();
 			drawBlockItems(t);
+			stereoEndStage(t, false);
+		}
 
 		if (t < 15) {
 			uint16 w = _wllWallFlags[s];
 
-			if ((drawFlags & 0x04) && (w & 8))
+			if ((drawFlags & 0x04) && (w & 8)) {
+				stereoBeginStage();
 				drawDoor(t);
+				stereoEndStage(t, true);
+			}
+		}
 
+		stereoBeginStage();
+
+		if (t < 15) {
 			if ((drawFlags & 0x08) && (_visibleBlocks[t]->flags & 7)) {
 				const ScreenDim *dm = _screen->getScreenDim(5);
 				_screen->modifyScreenDim(5, dm->sx, _lvlShapeTop[t], dm->w, _lvlShapeBottom[t] - _lvlShapeTop[t]);
@@ -661,7 +674,11 @@ void EoBCoreEngine::drawSceneShapes(int start, int end, int drawFlags) {
 
 		if ((drawFlags & 0x40) && s == _teleporterWallId)
 			drawTeleporter(t);
+
+		stereoEndStage(t, false);
 	}
+
+	_screen->stereoViewDone(_sceneDrawPage1);
 }
 
 void EoBCoreEngine::drawDecorations(int index) {

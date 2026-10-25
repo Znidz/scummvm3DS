@@ -290,6 +290,8 @@ private:
 	bool _stereoDepthActive;
 	bool _stereoWarped;
 	float _stereoSlider;
+	int _stereoStrength;
+	int _stereoPosition;
 	int8 _stereoShift[2][256];
 
 	// Focus

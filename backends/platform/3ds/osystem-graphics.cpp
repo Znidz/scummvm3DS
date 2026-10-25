@@ -514,7 +514,7 @@ void OSystem_3DS::updateStereoSlider() {
 
 	_stereoSlider = slider;
 	for (int d = 0; d < 256; ++d) {
-		const float exact = (d - 128) * slider * kMaxSeparation / 128.f;
+		const float exact = (d - 128 + _stereoPosition) * slider * kMaxSeparation * _stereoStrength / (128.f * 100.f);
 		const int separation = (int)(exact + (exact < 0.f ? -0.5f : 0.5f));
 		_stereoShift[0][d] = separation / 2;
 		_stereoShift[1][d] = separation / 2 - separation;

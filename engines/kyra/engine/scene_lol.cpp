@@ -1413,12 +1413,16 @@ void LoLEngine::drawSceneShapes(int) {
 		if (_shpDmX2 <= _shpDmX1)
 			continue;
 
+		stereoBeginStage();
 		drawDecorations(t);
+		stereoEndStage(t, true);
 
 		uint16 w = _wllWallFlags[s];
 
 		if (t == 16)
 			w |= 0x80;
+
+		stereoBeginStage();
 
 		drawBlockEffects(t, 0);
 
@@ -1427,6 +1431,8 @@ void LoLEngine::drawSceneShapes(int) {
 
 		drawBlockEffects(t, 1);
 
+		stereoEndStage(t, false);
+
 		if (!(w & 8))
 			continue;
 
@@ -1434,10 +1440,14 @@ void LoLEngine::drawSceneShapes(int) {
 		if (v > 80)
 			v = 80;
 
+		stereoBeginStage();
 		setDoorShapeDim(t, dimY1, dimY2, _sceneShpDim);
 		drawDoor(_doorShapes[(s < 23 ? _dscDoorShpIndex[s] : 0)], 0, t, 10, 0, -v, 2);
 		setLevelShapesDim(t, dimY1, dimY2, _sceneShpDim);
+		stereoEndStage(t, true);
 	}
+
+	_screen->stereoViewDone(_sceneDrawPage1);
 }
 
 void LoLEngine::drawDecorations(int index) {

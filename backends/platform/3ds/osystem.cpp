@@ -86,6 +86,8 @@ OSystem_3DS::OSystem_3DS():
 	_stereoDepthActive(false),
 	_stereoWarped(false),
 	_stereoSlider(0.f),
+	_stereoStrength(100),
+	_stereoPosition(0),
 	exiting(false),
 	sleeping(false),
 	_logger(0),

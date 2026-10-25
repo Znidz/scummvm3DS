@@ -319,6 +319,15 @@ protected:
 
 	void setVcnFormat(int outputBPP, Common::RenderMode renderMode);
 	void drawVcnBlocks();
+
+	// Stereoscopic depth of the first person view
+	void stereoInit();
+	bool stereoWallColumnDepths(uint8 startBlockY, int16 vmpOffset, uint8 numBlocksX, bool flipped, uint8 *depths) const;
+	uint8 stereoBlockDepth(int block, bool face) const;
+	void stereoBeginStage();
+	void stereoEndStage(int block, bool face);
+	uint8 _vcnDepth[330];
+	bool _stereoInitDone;
 	void vcnDraw_fw_4bit(uint8 *&dst, const uint8 *&src);
 	void vcnDraw_bw_4bit(uint8 *&dst, const uint8 *&src);
 	template<bool cga> void vcnDraw_fw_trans_4bit(uint8 *&dst, const uint8 *&src);

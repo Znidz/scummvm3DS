@@ -194,6 +194,8 @@ Common::Error KyraRpgEngine::init() {
 	_wllWallFlags = new uint8[256]();
 
 	_blockDrawingBuffer = new uint16[1320]();
+	memset(_vcnDepth, 0, sizeof(_vcnDepth));
+	_stereoInitDone = false;
 	_sceneWindowBuffer = nullptr;
 
 	_lvlShapeTop = new int16[18]();
