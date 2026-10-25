@@ -1,0 +1,71 @@
+# Builds the stereoscopic 3DS version of ScummVM and publishes the
+# .cia and .3dsx as a GitHub release, so they can be installed from a phone.
+name: Build 3DS
+
+on:
+  push:
+    branches: [stereo3d]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 3DS libraries and helper tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends jq unzip curl ca-certificates
+          dkp-pacman -Sy --needed --noconfirm 3ds-dev 3ds-zlib 3ds-libpng \
+            3ds-libjpeg-turbo 3ds-libmad 3ds-libogg 3ds-libvorbisidec 3ds-flac
+
+      - name: Fetch makerom and bannertool
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$HOME/tools" && cd "$HOME/tools"
+          asset() {
+            curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$1/releases/$2" \
+              | jq -r ".assets[] | select(.name | test(\"$3\")) | .browser_download_url" | head -n1
+          }
+          curl -fsSL -o makerom.zip "$(asset 3DSGuy/Project_CTR latest 'makerom.*ubuntu.*x86_64.*zip')"
+          unzip -o makerom.zip
+          curl -fsSL -o bannertool.zip "$(asset Steveice10/bannertool latest 'bannertool.*zip')"
+          unzip -o bannertool.zip
+          cp linux-x86_64/bannertool ./bannertool
+          chmod +x makerom bannertool
+          ls -l
+
+      - name: Configure
+        run: |
+          export PATH="$DEVKITARM/bin:$PATH"
+          export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/3ds/lib/pkgconfig"
+          ./configure --host=3ds --disable-all-engines --enable-engine=kyra,scumm
+
+      - name: Build
+        run: |
+          export PATH="$DEVKITARM/bin:$PATH"
+          make -j"$(nproc)"
+          make scummvm.3dsx
+          make scummvm.cia MAKEROM="$HOME/tools/makerom" BANNERTOOL="$HOME/tools/bannertool"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="stereo3d-${GITHUB_RUN_NUMBER}"
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}"
+          REL=$(curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" "$API/releases" \
+            -d "{\"tag_name\":\"$TAG\",\"target_commitish\":\"$GITHUB_SHA\",\"name\":\"Stereo 3DS build $GITHUB_RUN_NUMBER\",\"body\":\"Built from $GITHUB_SHA\"}")
+          UPLOAD=$(echo "$REL" | jq -r .upload_url | sed 's/{.*//')
+          for f in scummvm.cia scummvm.3dsx; do
+            curl -fsSL -X POST -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary @"$f" "$UPLOAD?name=$f" > /dev/null
+          done
