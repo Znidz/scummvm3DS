@@ -1398,6 +1398,31 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 		planeGroundY[mask] = MAX(planeGroundY[mask], boxBottom);
 	}
 
+	// Walls stand upright at the back of the floor: for each column, the
+	// furthest point any walkbox reaches is where the floor meets the wall.
+	// Pixels above it share its depth, pixels below it are floor.
+	struct BoxTop {
+		int x1, x2, ulx, uly, urx, ury;
+	};
+	BoxTop boxTops[64];
+	int numBoxTops = 0;
+	int farthestFloorY = -1;
+	for (int box = 0; box < numBoxes && numBoxTops < 64; ++box) {
+		if (getBoxFlags(box) & kBoxInvisible)
+			continue;
+		const BoxCoords c = getBoxCoordinates(box);
+		BoxTop &t = boxTops[numBoxTops++];
+		t.x1 = MIN(MIN(c.ul.x, c.ll.x), MIN(c.ur.x, c.lr.x));
+		t.x2 = MAX(MAX(c.ul.x, c.ll.x), MAX(c.ur.x, c.lr.x));
+		t.ulx = c.ul.x;
+		t.uly = c.ul.y;
+		t.urx = c.ur.x;
+		t.ury = c.ur.y;
+		const int boxTopY = MIN(c.ul.y, c.ur.y);
+		if (farthestFloorY < 0 || boxTopY < farthestFloorY)
+			farthestFloorY = boxTopY;
+	}
+
 	// Mask rows are _numStrips bytes apart, so find each plane's start once
 	const byte *maskBase[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 	for (int z = 1; z < numPlanes; ++z) {
@@ -1408,6 +1433,23 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 	for (int col = 0; col < width; ++col) {
 		const int sx = x + col;
 		const int strip = (sx + vs->xstart) / 8;
+		const int roomX = sx + vs->xstart;
+
+		int backWallY = -1;
+		for (int b = 0; b < numBoxTops; ++b) {
+			const BoxTop &t = boxTops[b];
+			if (roomX < t.x1 || roomX > t.x2)
+				continue;
+			int topY;
+			if (t.urx == t.ulx)
+				topY = MIN(t.uly, t.ury);
+			else
+				topY = t.uly + (CLIP(roomX, MIN(t.ulx, t.urx), MAX(t.ulx, t.urx)) - t.ulx) * (t.ury - t.uly) / (t.urx - t.ulx);
+			if (backWallY < 0 || topY < backWallY)
+				backWallY = topY;
+		}
+		if (backWallY < 0)
+			backWallY = farthestFloorY;
 
 		// Actors drawn over this column of the screen
 		int actorList[64];
@@ -1443,7 +1485,8 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 				}
 
 				if (groundY < 0) {
-					groundY = vy;
+					// Rooms without walkboxes stay as one flat backdrop
+					groundY = (backWallY < 0) ? 0 : MAX(vy, backWallY);
 					for (int z = 1; z < numPlanes; ++z) {
 						if (maskBase[z] && (maskBase[z][vy * _gdi->_numStrips + sx / 8] & revBitMask(sx & 7)))
 							groundY = MAX(groundY, planeGroundY[z]);
