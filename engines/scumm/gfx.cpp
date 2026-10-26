@@ -1375,6 +1375,9 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 	if (_stereoDepthState < 0)
 		return;
 
+	// SCUMM rooms are mostly upright walls, where dithering looks jagged
+	_system->setFeatureState(OSystem::kFeatureStereoDither, false);
+
 	_stereoDepthBuf.resize(width * height);
 	byte *out = _stereoDepthBuf.data();
 

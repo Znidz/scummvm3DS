@@ -142,11 +142,18 @@ bool OSystem_3DS::hasFeature(OSystem::Feature f) {
 	        f == OSystem::kFeatureOverlaySupportsAlpha ||
 	        f == OSystem::kFeatureKbdMouseSpeed ||
 	        f == OSystem::kFeatureJoystickDeadzone ||
-	        (f == OSystem::kFeatureStereoDepth && _stereoAvailable));
+	        ((f == OSystem::kFeatureStereoDepth || f == OSystem::kFeatureStereoDither) && _stereoAvailable));
 }
 
 void OSystem_3DS::setFeatureState(OSystem::Feature f, bool enable) {
 	switch (f) {
+	case OSystem::kFeatureStereoDither:
+		if (_stereoDither != enable) {
+			_stereoDither = enable;
+			// Make the next screen update recalculate the eye shifts
+			_stereoSlider = -1.f;
+		}
+		break;
 	case OSystem::kFeatureCursorPalette:
 		_cursorPaletteEnabled = enable;
 		flushCursor();
@@ -238,6 +245,10 @@ void OSystem_3DS::initSize(uint width, uint height,
 
 	// Depth starts flat at the screen plane until the engine supplies some
 	_stereoDepthActive = false;
+	if (!_stereoDither) {
+		_stereoDither = true;
+		_stereoSlider = -1.f;
+	}
 	_stereoWarped = false;
 	if (_stereoAvailable && _pfGame.isCLUT8()) {
 		_gameTopTextureRight.create(width, height, _gfxState.gfxMode, true);
@@ -458,8 +469,8 @@ void OSystem_3DS::stereoWarp(int eye) {
 	const int w = _gameScreen.w;
 	int16 *rowDepth = new int16[w];
 
-	const int8 *shift = _stereoShift[eye];
 	for (int y = 0; y < _gameScreen.h; ++y) {
+		const int8 *shift = _stereoShift[eye][y & 3];
 		const byte *src = (const byte *)_gameScreen.getBasePtr(0, y);
 		const byte *depth = (const byte *)_gameDepth.getBasePtr(0, y);
 		byte *dst = (byte *)_stereoEye.getBasePtr(0, y);
@@ -512,17 +523,27 @@ void OSystem_3DS::updateStereoSlider() {
 	if (change < 0.02f && change > -0.02f && (slider > 0.f) == (_stereoSlider > 0.f))
 		return;
 
+	// The shift can only be whole pixels. With dithering, rows take turns
+	// rounding up or down, so that seen together they give the depths in
+	// between. The thresholds are a 4 step ordered dither. Without it every
+	// row rounds to the nearest pixel.
+	static const float kDither[4] = { 0.125f, 0.625f, 0.375f, 0.875f };
+
 	_stereoSlider = slider;
 	for (int d = 0; d < 256; ++d) {
 		const float separation = (d - 128 + _stereoPosition) * slider * kMaxSeparation * _stereoStrength / (128.f * 100.f);
-		// Round each eye's half of the separation to whole pixels
-		const float left = separation / 2.f + 0.5f;
-		int leftShift = (int)left;
-		if (left < leftShift)
-			--leftShift;
-		const int rightShift = leftShift - (int)(separation + (separation < 0.f ? -0.5f : 0.5f));
-		_stereoShift[0][d] = (int8)CLIP<int>(leftShift, -64, 64);
-		_stereoShift[1][d] = (int8)CLIP<int>(rightShift, -64, 64);
+		for (int phase = 0; phase < 4; ++phase) {
+			const float threshold = _stereoDither ? kDither[phase] : 0.5f;
+			const float left = separation / 2.f + threshold;
+			const float right = -separation / 2.f + threshold;
+			int leftShift = (int)left, rightShift = (int)right;
+			if (left < leftShift)
+				--leftShift;
+			if (right < rightShift)
+				--rightShift;
+			_stereoShift[0][phase][d] = (int8)CLIP<int>(leftShift, -64, 64);
+			_stereoShift[1][phase][d] = (int8)CLIP<int>(rightShift, -64, 64);
+		}
 	}
 
 	if (_stereoDepthActive)

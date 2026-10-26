@@ -650,6 +650,14 @@ public:
 		* per-pixel depth supplied through copyRectToScreenDepth().
 		*/
 		kFeatureStereoDepth,
+
+		/**
+		* Dither the stereoscopic shift between rows so that depths between
+		* whole pixel shifts can be seen. Smooth for sloping surfaces, but
+		* makes vertical edges at a slope jagged. On by default, reset by
+		* initSize().
+		*/
+		kFeatureStereoDither,
 	};
 
 	/**
