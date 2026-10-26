@@ -1355,7 +1355,170 @@ const int kStereoFarDepth = 40;
 const int kStereoNearDepth = 128;
 const byte kStereoFlatDepth = 128;
 const byte kStereoTextDepth = 150;
+// Close-ups: the painted backdrop behind the screen, the subject in front
+const byte kStereoCloseupBackDepth = 75;
+const byte kStereoCloseupSubjectDepth = 150;
+// Overhead maps: the sea just behind the screen, the highest peaks in front
+const int kStereoMapSeaDepth = 112;
+const int kStereoMapPeakDepth = 172;
+
+// Spreads values over a square of radius r, in place
+void stereoBoxBlur(Common::Array<float> &v, int w, int h, int r) {
+	Common::Array<float> tmp(w * h);
+	for (int y = 0; y < h; ++y) {
+		for (int x = 0; x < w; ++x) {
+			float sum = 0.f;
+			int n = 0;
+			for (int i = MAX(0, x - r); i <= MIN(w - 1, x + r); ++i, ++n)
+				sum += v[y * w + i];
+			tmp[y * w + x] = sum / n;
+		}
+	}
+	for (int y = 0; y < h; ++y) {
+		for (int x = 0; x < w; ++x) {
+			float sum = 0.f;
+			int n = 0;
+			for (int i = MAX(0, y - r); i <= MIN(h - 1, y + r); ++i, ++n)
+				sum += tmp[i * w + x];
+			v[y * w + x] = sum / n;
+		}
+	}
+}
 } // End of anonymous namespace
+
+// Recognises an overhead map by sea all the way round its edges, and guesses
+// the height of the land: further from the coast is higher, and so is land
+// drawn with lots of detail, which is how hills and mountains are shaded.
+void ScummEngine::stereoAnalyseMap(VirtScreen *vs) {
+	_stereoMapRoom = _currentRoom;
+	_stereoMapDepth.clear();
+
+	const int w = vs->w, h = vs->h;
+	if (!vs->backBuf || w < 64 || h < 64 || w > 1280 || h > 256)
+		return;
+	const byte *bg = vs->backBuf;
+	const int pitch = vs->pitch;
+
+	// The sea is the few colours that fill most of the edges
+	uint32 hist[256];
+	memset(hist, 0, sizeof(hist));
+	int total = 0;
+	for (int x = 0; x < w; ++x) {
+		++hist[bg[x]];
+		++hist[bg[(h - 1) * pitch + x]];
+		total += 2;
+	}
+	for (int y = 0; y < h; ++y) {
+		++hist[bg[y * pitch]];
+		++hist[bg[y * pitch + w - 1]];
+		total += 2;
+	}
+
+	bool sea[256];
+	memset(sea, 0, sizeof(sea));
+	uint32 covered = 0;
+	for (int n = 0; n < 12 && covered * 100 < (uint32)total * 85; ++n) {
+		int best = -1;
+		for (int i = 0; i < 256; ++i) {
+			if (!sea[i] && (best < 0 || hist[i] > hist[best]))
+				best = i;
+		}
+		if (best < 0 || !hist[best])
+			break;
+		sea[best] = true;
+		covered += hist[best];
+	}
+	if (covered * 100 < (uint32)total * 85)
+		return;
+
+	// Every edge has to be mostly sea, not just one side of the picture
+	int sideSea[4] = { 0, 0, 0, 0 };
+	for (int x = 0; x < w; ++x) {
+		sideSea[0] += sea[bg[x]] ? 1 : 0;
+		sideSea[1] += sea[bg[(h - 1) * pitch + x]] ? 1 : 0;
+	}
+	for (int y = 0; y < h; ++y) {
+		sideSea[2] += sea[bg[y * pitch]] ? 1 : 0;
+		sideSea[3] += sea[bg[y * pitch + w - 1]] ? 1 : 0;
+	}
+	if (sideSea[0] * 4 < w * 3 || sideSea[1] * 4 < w * 3 || sideSea[2] * 4 < h * 3 || sideSea[3] * 4 < h * 3)
+		return;
+
+	// Distance from the sea, in thirds of a pixel (3 straight, 4 diagonal)
+	Common::Array<uint16> dist(w * h);
+	int landPixels = 0;
+	for (int y = 0; y < h; ++y) {
+		for (int x = 0; x < w; ++x) {
+			const bool land = !sea[bg[y * pitch + x]];
+			dist[y * w + x] = land ? 0xFFFF : 0;
+			landPixels += land ? 1 : 0;
+		}
+	}
+	if (landPixels * 20 < w * h || landPixels * 20 > w * h * 19)
+		return;
+
+	for (int y = 0; y < h; ++y) {
+		for (int x = 0; x < w; ++x) {
+			uint32 d = dist[y * w + x];
+			if (x > 0)
+				d = MIN<uint32>(d, dist[y * w + x - 1] + 3);
+			if (y > 0) {
+				d = MIN<uint32>(d, dist[(y - 1) * w + x] + 3);
+				if (x > 0)
+					d = MIN<uint32>(d, dist[(y - 1) * w + x - 1] + 4);
+				if (x < w - 1)
+					d = MIN<uint32>(d, dist[(y - 1) * w + x + 1] + 4);
+			}
+			dist[y * w + x] = d;
+		}
+	}
+	for (int y = h - 1; y >= 0; --y) {
+		for (int x = w - 1; x >= 0; --x) {
+			uint32 d = dist[y * w + x];
+			if (x < w - 1)
+				d = MIN<uint32>(d, dist[y * w + x + 1] + 3);
+			if (y < h - 1) {
+				d = MIN<uint32>(d, dist[(y + 1) * w + x] + 3);
+				if (x < w - 1)
+					d = MIN<uint32>(d, dist[(y + 1) * w + x + 1] + 4);
+				if (x > 0)
+					d = MIN<uint32>(d, dist[(y + 1) * w + x - 1] + 4);
+			}
+			dist[y * w + x] = d;
+		}
+	}
+
+	// How busy the drawing is around each pixel
+	Common::Array<float> detail(w * h);
+	for (int y = 0; y < h; ++y) {
+		for (int x = 0; x < w; ++x) {
+			const byte c = bg[y * pitch + x];
+			int changes = 0;
+			if (x > 0 && bg[y * pitch + x - 1] != c)
+				++changes;
+			if (y > 0 && bg[(y - 1) * pitch + x] != c)
+				++changes;
+			detail[y * w + x] = changes * 0.5f;
+		}
+	}
+	stereoBoxBlur(detail, w, h, 4);
+
+	static const float kInland = 3.f * 30.f; // 30 pixels from the coast is high ground
+	Common::Array<float> height(w * h);
+	for (int i = 0; i < w * h; ++i) {
+		if (!dist[i]) {
+			height[i] = 0.f;
+			continue;
+		}
+		const float inland = MIN<float>(dist[i], kInland) / kInland;
+		height[i] = 0.65f * inland + 0.35f * MIN(detail[i] * 1.5f, 1.f);
+	}
+	stereoBoxBlur(height, w, h, 3);
+
+	_stereoMapDepth.resize(w * h);
+	for (int i = 0; i < w * h; ++i)
+		_stereoMapDepth[i] = (byte)(kStereoMapSeaDepth + CLIP(height[i], 0.f, 1.f) * (kStereoMapPeakDepth - kStereoMapSeaDepth));
+}
 
 byte ScummEngine::stereoDepthForGroundY(int groundY, int roomHeight) const {
 	if (roomHeight < 2)
@@ -1435,6 +1598,12 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 			farthestFloorY = boxTopY;
 	}
 
+	if (_stereoMapRoom != _currentRoom || (!_stereoMapDepth.empty() && _stereoMapDepth.size() != (uint)(vs->w * vs->h)))
+		stereoAnalyseMap(vs);
+	const byte *mapDepth = _stereoMapDepth.empty() ? nullptr : _stereoMapDepth.data();
+	// A room with nowhere to walk is a close-up or cutscene
+	const bool closeup = !mapDepth && numBoxTops == 0;
+
 	// Mask rows are _numStrips bytes apart, so find each plane's start once
 	const byte *maskBase[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 	for (int z = 1; z < numPlanes; ++z)
@@ -1483,15 +1652,37 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 				depth = kStereoTextDepth;
 			} else {
 				int groundY = -1;
+				int actorX = 0;
 
 				// Pixels that differ from the clean background belong to the
 				// nearest actor covering them
 				if (back && *front != *back) {
 					for (int n = 0; n < numActorsHere; ++n) {
 						const Actor *a = _actors[actorList[n]];
-						if (vy >= a->_top && vy <= a->_bottom)
-							groundY = MAX<int>(groundY, a->getRealPos().y);
+						if (vy >= a->_top && vy <= a->_bottom && a->getRealPos().y > groundY) {
+							groundY = a->getRealPos().y;
+							actorX = a->getRealPos().x;
+						}
 					}
+				}
+
+				bool inPlane = false;
+				for (int z = 1; z < numPlanes && !inPlane; ++z)
+					inPlane = maskBase[z] && (maskBase[z][vy * _gdi->_numStrips + sx / 8] & revBitMask(sx & 7));
+
+				if (mapDepth) {
+					// Actors stand on the ground at their feet
+					const int mx = (groundY >= 0) ? CLIP(actorX, 0, vs->w - 1) : CLIP(roomX, 0, vs->w - 1);
+					const int my = (groundY >= 0) ? CLIP(groundY, 0, vs->h - 1) : vy;
+					depth = MIN(mapDepth[my * vs->w + mx] + (groundY >= 0 ? 6 : 0), 255);
+					out[row * width + col] = depth;
+					continue;
+				}
+
+				if (closeup) {
+					depth = (groundY >= 0) ? kStereoCloseupSubjectDepth : (inPlane ? kStereoCloseupSubjectDepth - 10 : kStereoCloseupBackDepth);
+					out[row * width + col] = depth;
+					continue;
 				}
 
 				if (groundY < 0) {

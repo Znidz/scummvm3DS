@@ -1525,6 +1525,10 @@ protected:
 	byte stereoDepthForGroundY(int groundY, int roomHeight) const;
 	int _stereoDepthState = 0; // 0: not checked yet, 1: on, -1: off
 	Common::Array<byte> _stereoDepthBuf;
+	// Overhead maps get a guessed height map, worked out once per room
+	void stereoAnalyseMap(VirtScreen *vs);
+	int _stereoMapRoom = -1;
+	Common::Array<byte> _stereoMapDepth;
 
 	void mac_markScreenAsDirty(int x, int y, int w, int h);
 	void mac_drawStripToScreen(VirtScreen *vs, int top, int x, int y, int width, int height);
