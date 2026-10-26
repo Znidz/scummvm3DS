@@ -1400,6 +1400,15 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 		const int boxBottom = MAX(MAX(coords.ul.y, coords.ur.y), MAX(coords.ll.y, coords.lr.y));
 		planeGroundY[mask] = MAX(planeGroundY[mask], boxBottom);
 	}
+	for (int z = 1; z < numPlanes; ++z) {
+		if (planeGroundY[z])
+			// Just in front of the furthest forward actor it can hide
+			planeGroundY[z] = MIN(planeGroundY[z] + 8, vs->h - 1);
+		else
+			// No walkbox tells how near this plane is, but it is always in
+			// front of actors, so bring it to the front of the room
+			planeGroundY[z] = vs->h - 1;
+	}
 
 	// Walls stand upright at the back of the floor: for each column, the
 	// furthest point any walkbox reaches is where the floor meets the wall.
@@ -1428,10 +1437,8 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 
 	// Mask rows are _numStrips bytes apart, so find each plane's start once
 	const byte *maskBase[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	for (int z = 1; z < numPlanes; ++z) {
-		if (planeGroundY[z])
-			maskBase[z] = getMaskBuffer(0, 0, z);
-	}
+	for (int z = 1; z < numPlanes; ++z)
+		maskBase[z] = getMaskBuffer(0, 0, z);
 
 	for (int col = 0; col < width; ++col) {
 		const int sx = x + col;
