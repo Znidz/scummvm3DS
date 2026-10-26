@@ -1355,9 +1355,13 @@ const int kStereoFarDepth = 40;
 const int kStereoNearDepth = 128;
 const byte kStereoFlatDepth = 128;
 const byte kStereoTextDepth = 150;
-// Close-ups: the painted backdrop behind the screen, the subject in front
+// Close-ups and special screens: the painted backdrop behind the screen,
+// actors in the middle ordered by position, and z-plane scenery, which
+// hides actors, in front of them all
 const byte kStereoCloseupBackDepth = 75;
-const byte kStereoCloseupSubjectDepth = 150;
+const int kStereoCloseupActorFarDepth = 115;
+const int kStereoCloseupActorNearDepth = 150;
+const byte kStereoCloseupPlaneDepth = 162;
 // Overhead maps: the sea just behind the screen, the highest peaks in front
 const int kStereoMapSeaDepth = 112;
 const int kStereoMapPeakDepth = 172;
@@ -1604,6 +1608,22 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 	// A room with nowhere to walk is a close-up or cutscene
 	const bool closeup = !mapDepth && numBoxTops == 0;
 
+	// SCUMM draws actors in order of their y position, so it also tells
+	// which of them the game treats as nearer
+	int closeupMinY = 0, closeupMaxY = 0;
+	if (closeup) {
+		bool first = true;
+		for (int i = 1; i < _numActors; ++i) {
+			const Actor *a = _actors[i];
+			if (!a->isInCurrentRoom() || !a->_visible)
+				continue;
+			const int ay = a->getRealPos().y;
+			closeupMinY = first ? ay : MIN(closeupMinY, ay);
+			closeupMaxY = first ? ay : MAX(closeupMaxY, ay);
+			first = false;
+		}
+	}
+
 	// Mask rows are _numStrips bytes apart, so find each plane's start once
 	const byte *maskBase[8] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 	for (int z = 1; z < numPlanes; ++z)
@@ -1680,7 +1700,15 @@ void ScummEngine::sendStereoDepth(VirtScreen *vs, int x, int top, int y, int wid
 				}
 
 				if (closeup) {
-					depth = (groundY >= 0) ? kStereoCloseupSubjectDepth : (inPlane ? kStereoCloseupSubjectDepth - 10 : kStereoCloseupBackDepth);
+					if (inPlane && groundY < 0) {
+						depth = kStereoCloseupPlaneDepth;
+					} else if (groundY >= 0) {
+						const int range = closeupMaxY - closeupMinY;
+						const int t = range > 0 ? (CLIP(groundY, closeupMinY, closeupMaxY) - closeupMinY) * 256 / range : 128;
+						depth = kStereoCloseupActorFarDepth + (kStereoCloseupActorNearDepth - kStereoCloseupActorFarDepth) * t / 256;
+					} else {
+						depth = kStereoCloseupBackDepth;
+					}
 					out[row * width + col] = depth;
 					continue;
 				}
